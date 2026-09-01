@@ -92,7 +92,7 @@ const BLOCK_TEMPLATES = {
     type: 'details',
     data: {
       desc: '一个用于演示的 Loon 插件',
-      author: 'YourName',
+      author: 'kyler404',
       homepage: 'https://github.com/kyler404/loon-plugin-demo',
       tag: 'Proxy',
       system: 'iOS,iPadOS,tvOS,macOS',

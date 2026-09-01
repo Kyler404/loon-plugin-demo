@@ -1,7 +1,7 @@
 #!name=Demo Plugin
 #!desc=一个最小的 Loon 插件示例，演示规则 / 复写 / 脚本 / MITM 四块组合
 #!icon=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png
-#!author=YourName
+#!author=kyler404
 #!homepage=https://github.com/kyler404/loon-plugin-demo
 #!tag=Proxy
 #!system=iOS,iPadOS,tvOS,macOS

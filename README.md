@@ -21,12 +21,27 @@ loon-plugin-demo/
 
 ## 在线使用
 
-直接双击 `index.html` 即可。若浏览器限制了 localStorage，改用本地服务器：
+直接双击 `index.html` 即可，无需构建、无需后端。
+
+若浏览器限制了 localStorage（部分浏览器直接双击打开时会），改用本地服务器：
 
 ```bash
 python -m http.server 8000
 # 然后访问 http://127.0.0.1:8000
 ```
+
+### 部署到 GitHub Pages
+
+工作台是纯静态的，可以直接托管：
+
+1. 仓库 Settings → Pages → Source 选 `Deploy from a branch`
+2. Branch 选 `main`，目录选 `/ (root)`
+3. 保存后访问 `https://<用户名>.github.io/loon-plugin-demo/`
+
+注意两点：
+
+- 草稿存在**浏览器 localStorage**，换设备或换浏览器不会同步，重要插件记得导出 `.plugin` 备份
+- 生成的插件里 `script-path` 要填 raw 远程链接，改完脚本**先 push** 再在 Loon 里重载，否则拉到的还是旧版本
 
 ## 工作台能做什么
 
