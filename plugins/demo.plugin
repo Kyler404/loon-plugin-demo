@@ -1,8 +1,8 @@
 #!name=Demo Plugin
 #!desc=一个最小的 Loon 插件示例，演示规则 / 复写 / 脚本 / MITM 四块组合
-#!icon=https://raw.githubusercontent.com/yourname/loon-plugin-demo/main/assets/icon.png
+#!icon=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png
 #!author=YourName
-#!homepage=https://github.com/yourname/loon-plugin-demo
+#!homepage=https://github.com/kyler404/loon-plugin-demo
 #!tag=Proxy
 #!system=iOS,iPadOS,tvOS,macOS
 
@@ -14,7 +14,7 @@ AND,((DOMAIN-KEYWORD,ads),(USER-AGENT,*AdBot*)),REJECT
 ^https?:\/\/(www\.)?example\.cn\/path https://example.com/path 302
 
 [Script]
-http-response ^https?:\/\/api\.example\.com\/v1\/user script-path=https://raw.githubusercontent.com/yourname/loon-plugin-demo/main/scripts/demo.js, requires-body=true, timeout=10, tag=DemoUser
+http-response ^https?:\/\/api\.example\.com\/v1\/user script-path=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js, requires-body=true, timeout=10, tag=DemoUser
 
 [MITM]
 hostname = api.example.com, *.example.cn

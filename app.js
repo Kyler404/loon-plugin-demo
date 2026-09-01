@@ -92,10 +92,10 @@ const BLOCK_TEMPLATES = {
     data: {
       desc: '一个用于演示的 Loon 插件',
       author: 'YourName',
-      homepage: 'https://github.com/yourname/loon-plugin-demo',
+      homepage: 'https://github.com/kyler404/loon-plugin-demo',
       tag: 'Proxy',
       system: 'iOS,iPadOS,tvOS,macOS',
-      icon: 'https://raw.githubusercontent.com/yourname/loon-plugin-demo/main/assets/icon.png'
+      icon: 'https://raw.githubusercontent.com/kylet404/loon-plugin-demo/main/assets/icon.png'
     }
   },
   hostnames: {
@@ -129,7 +129,7 @@ const BLOCK_TEMPLATES = {
       match: '^https?:\\/\\/api\\.example\\.com\\/v1\\/user',
       tag: 'DemoUser',
       file: 'demo.js',
-      path: 'https://raw.githubusercontent.com/yourname/loon-plugin-demo/main/scripts/demo.js',
+      path: 'https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js',
       timeout: '10',
       requiresBody: 'true',
       enable: 'true',
