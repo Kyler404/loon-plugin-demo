@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Loon Plugin Studio · 插件可视化工作台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <!-- ============ 左侧：插件列表 ============ -->
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">L</div>
+          <div class="brand-text">
+            <strong>Loon Studio</strong>
+            <span>插件可视化工作台</span>
+          </div>
+        </div>
+
+        <button id="newPluginBtn" class="btn btn-primary btn-block">
+          <span class="ico">＋</span> 新建插件
+        </button>
+
+        <div class="side-section">
+          <div class="side-label">我的插件 <span id="pluginCount" class="count">0</span></div>
+          <div id="pluginList" class="plugin-list"></div>
+        </div>
+
+        <div class="side-foot">
+          <div id="saveHint" class="save-hint">草稿自动保存在本机浏览器</div>
+          <button id="resetBtn" class="btn btn-ghost btn-block btn-sm">恢复示例插件</button>
+        </div>
+      </aside>
+
+      <!-- ============ 中间：构建画布 ============ -->
+      <main class="workspace">
+        <header class="topbar">
+          <div class="topbar-left">
+            <span class="eyebrow">插件编辑器</span>
+            <input id="nameInput" class="page-title" type="text" placeholder="未命名插件" aria-label="插件名称" />
+            <div class="topbar-meta">
+              <span id="blockCount">0 个区块</span>
+              <span class="sep">·</span>
+              <span id="statusHint" class="status-hint">已同步</span>
+            </div>
+          </div>
+
+          <div class="topbar-right">
+            <div class="anchor">
+              <button id="addBlockBtn" class="btn btn-soft" aria-haspopup="true" aria-expanded="false">
+                <span class="ico">＋</span> 添加区块
+              </button>
+              <div id="blockPalette" class="popover" hidden></div>
+            </div>
+            <button id="downloadBtn" class="btn btn-primary">
+              <span class="ico">↓</span> 导出 .plugin
+            </button>
+          </div>
+        </header>
+
+        <div id="builderCanvas" class="canvas"></div>
+      </main>
+
+      <!-- ============ 右侧：实时预览 ============ -->
+      <aside class="preview">
+        <div class="preview-head">
+          <div class="tabs" id="tabs" role="tablist">
+            <button class="tab is-active" data-tab="plugin" role="tab">.plugin</button>
+            <button class="tab" data-tab="script" role="tab">脚本 .js</button>
+            <button class="tab" data-tab="issues" role="tab">校验 <span id="issueCount" class="pill">0</span></button>
+          </div>
+          <div class="preview-tools">
+            <button id="copyBtn" class="btn btn-ghost btn-sm">复制</button>
+            <button id="downloadScriptBtn" class="btn btn-ghost btn-sm">下载 JS</button>
+          </div>
+        </div>
+
+        <div class="preview-body">
+          <pre id="codePreview" class="code"><code></code></pre>
+          <div id="issuesPanel" class="issues" hidden></div>
+        </div>
+
+        <div class="preview-foot">
+          <label class="mini-field">
+            <span>复写区块语法</span>
+            <select id="rewriteSyntax">
+              <option value="url-rewrite">[URL Rewrite] · 兼容写法</option>
+              <option value="rewrite">[Rewrite] · Loon 3.5.1+</option>
+            </select>
+          </label>
+        </div>
+      </aside>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
