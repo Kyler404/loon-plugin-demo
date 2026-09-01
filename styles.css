@@ -67,6 +67,11 @@
   --sidebar-bar: 52px;
   /* 由 JS 拖拽写入，右侧模式=宽度、底部模式=高度 */
   --preview-size: var(--preview-w);
+
+  /* 控件按钮统一尺寸 / 圆角（折叠、收展、区块控制等） */
+  --ctl: 36px;            /* 面板/侧栏收展等独立控件按钮 */
+  --ctl-sm: 34px;         /* 区块内 / 行内密集控件 */
+  --ctl-r: 11px;          /* 圆润 squircle */
 }
 
 /* =========================================================
@@ -245,21 +250,56 @@ textarea {
   font-size: 12px;
 }
 
+/* 统一图标控件：圆角带边框的明显按钮，不再是透明小图标 */
 .btn-icon {
-  padding: 6px 8px;
-  color: var(--muted);
-  border-color: transparent;
-  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--ctl-sm);
+  height: var(--ctl-sm);
+  padding: 0;
+  color: var(--text-2);
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  border-radius: var(--ctl-r);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+    box-shadow 0.15s ease, transform 0.12s ease;
 }
 
 .btn-icon:hover {
   background: var(--surface-3);
   color: var(--text);
+  border-color: var(--line-2);
+  box-shadow: var(--sh-1);
+}
+
+.btn-icon:active {
+  transform: translateY(1px);
+}
+
+.btn-icon:focus-visible {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+
+.btn-icon.is-danger {
+  color: var(--err);
 }
 
 .btn-icon.is-danger:hover {
   background: var(--err-soft);
+  border-color: #f4cfcf;
   color: var(--err);
+}
+
+.btn-icon[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* =========================================================
@@ -342,33 +382,45 @@ textarea {
   align-items: center;
   justify-content: center;
   flex: none;
-  border: none;
-  background: transparent;
-  color: var(--muted);
+  width: var(--ctl);
+  height: var(--ctl);
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  color: var(--text-2);
   cursor: pointer;
-  border-radius: var(--r-xs);
-  transition: background 0.15s ease, color 0.15s ease;
+  border-radius: var(--ctl-r);
+  font-size: 16px;
+  line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+    transform 0.12s ease;
 }
 
 .sidebar-toggle {
   margin-left: auto;
-  width: 24px;
-  height: 24px;
-  font-size: 13px;
-  line-height: 1;
 }
 
 .sidebar-toggle:hover,
 .sidebar-expand:hover {
   background: var(--surface-3);
   color: var(--text);
+  border-color: var(--line-2);
+  box-shadow: var(--sh-1);
+}
+
+.sidebar-toggle:active,
+.sidebar-expand:active {
+  transform: translateY(1px);
+}
+
+.sidebar-toggle:focus-visible,
+.sidebar-expand:focus-visible {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
 }
 
 .sidebar-expand {
   display: none;
-  width: 100%;
-  height: 30px;
-  font-size: 14px;
 }
 
 .sidebar.is-collapsed {
@@ -409,6 +461,9 @@ textarea {
 
 .sidebar.is-collapsed .sidebar-expand {
   display: inline-flex;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-full);
 }
 
 .side-section {
@@ -732,25 +787,32 @@ textarea {
 .drag-handle {
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 30px;
-  flex: 0 0 26px;
-  border: none;
-  background: transparent;
-  color: #c2cada;
-  font-size: 15px;
+  width: var(--ctl-sm);
+  height: var(--ctl-sm);
+  flex: 0 0 var(--ctl-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 17px;
   line-height: 1;
   cursor: grab;
-  border-radius: var(--r-xs);
+  border-radius: var(--ctl-r);
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .drag-handle:hover {
   background: var(--surface-3);
-  color: var(--text-2);
+  border-color: var(--line-2);
+  color: var(--text);
+  box-shadow: var(--sh-1);
 }
 
 .drag-handle:active {
   cursor: grabbing;
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
+  color: var(--brand-600);
 }
 
 .card-badge {
@@ -790,7 +852,7 @@ textarea {
 .card-tools {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
 }
 
 .card-body {
@@ -965,45 +1027,44 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  border-radius: var(--r-xs);
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.preview-toggle {
+  gap: 6px;
   flex: none;
-  width: 26px;
-  height: 26px;
-  font-size: 15px;
+  width: var(--ctl);
+  height: var(--ctl);
+  border: 1px solid var(--line-2);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: var(--ctl-r);
+  font-size: 16px;
   line-height: 1;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
+    transform 0.12s ease;
 }
 
-.preview-toggle:hover {
+.preview-toggle:hover,
+.preview-expand:hover {
   background: var(--surface-3);
   color: var(--text);
+  border-color: var(--line-2);
+  box-shadow: var(--sh-1);
+}
+
+.preview-toggle:active,
+.preview-expand:active {
+  transform: translateY(1px);
+}
+
+.preview-toggle:focus-visible,
+.preview-expand:focus-visible {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
 }
 
 /* 右侧模式下折叠成竖条，文字竖排、箭头转向左 */
 .preview-expand {
   display: none;
-  width: 100%;
-  height: 100%;
-  padding: 10px 0;
-  writing-mode: vertical-rl;
-  flex-direction: column;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  background: var(--surface-2);
-}
-
-.preview-expand:hover {
-  background: var(--brand-soft);
-  color: var(--brand-600);
 }
 
 .preview-resizer {
@@ -1058,6 +1119,25 @@ textarea {
 
 .preview.is-collapsed .preview-expand {
   display: inline-flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  padding: 14px 0;
+  writing-mode: vertical-rl;
+  border: none;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+
+.preview.is-collapsed .preview-expand:hover {
+  background: var(--brand-soft);
+  color: var(--brand-600);
 }
 
 /* 右侧模式：chevron 转向左右 */
