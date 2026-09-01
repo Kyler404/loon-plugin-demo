@@ -14,6 +14,7 @@
 /* ========================= 常量 ========================= */
 
 const STORE_KEY = 'loon-plugin-studio.v1';
+const UI_STORE_KEY = 'loon-plugin-studio.ui.v1';
 
 /** 规则类型 */
 const RULE_TYPES = [
@@ -95,7 +96,7 @@ const BLOCK_TEMPLATES = {
       homepage: 'https://github.com/kyler404/loon-plugin-demo',
       tag: 'Proxy',
       system: 'iOS,iPadOS,tvOS,macOS',
-      icon: 'https://raw.githubusercontent.com/kylet404/loon-plugin-demo/main/assets/icon.png'
+      icon: 'https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png'
     }
   },
   hostnames: {
@@ -157,8 +158,14 @@ const state = {
   tab: 'plugin',
   rewriteSyntax: 'url-rewrite', // url-rewrite | rewrite
   dragId: null,
+  /* 界面偏好：collapsed=预览面板折叠；sideCollapsed=侧栏折叠；w/h 分别记住宽屏与窄屏下的预览尺寸 */
+  ui: { collapsed: false, sideCollapsed: false, w: 420, h: 320 },
   view: { text: '', scripts: [], issues: [] }
 };
+
+/** 预览面板最小/最大尺寸（px） */
+const PREVIEW_MIN = 180;
+const PREVIEW_MAX_RATIO = 0.75;
 
 /* ========================= 工具 ========================= */
 
@@ -224,21 +231,53 @@ const el = {
   addBlockBtn: $('#addBlockBtn'),
   newPluginBtn: $('#newPluginBtn'),
   resetBtn: $('#resetBtn'),
-  downloadBtn: $('#downloadBtn'),
-  downloadScriptBtn: $('#downloadScriptBtn'),
   copyBtn: $('#copyBtn'),
+  exportBtn: $('#exportBtn'),
+  exportLabel: $('#exportLabel'),
   tabs: $('#tabs'),
   codePreview: $('#codePreview'),
   issuesPanel: $('#issuesPanel'),
   issueCount: $('#issueCount'),
   rewriteSyntax: $('#rewriteSyntax'),
   saveHint: $('#saveHint'),
-  toast: $('#toast')
+  toast: $('#toast'),
+  /* 面板折叠 */
+  app: $('#app'),
+  sidebar: $('#sidebar'),
+  sidebarToggle: $('#sidebarToggle'),
+  sidebarExpand: $('#sidebarExpand'),
+  preview: $('#preview'),
+  previewFoot: $('#previewFoot'),
+  previewToggle: $('#previewToggle'),
+  previewExpand: $('#previewExpand'),
+  previewResizer: $('#previewResizer')
 };
 
 /* ========================= 持久化 ========================= */
 
 let saveTimer = null;
+
+/* 界面偏好（预览面板折叠状态 / 尺寸）单独存，不混进插件数据 */
+function saveUi() {
+  try {
+    localStorage.setItem(UI_STORE_KEY, JSON.stringify(state.ui));
+  } catch (err) {
+    /* 存不下就算了，不该因为记不住布局打断编辑 */
+  }
+}
+
+function loadUi() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(UI_STORE_KEY) || 'null');
+    if (!parsed || typeof parsed !== 'object') return;
+    state.ui.collapsed = !!parsed.collapsed;
+    state.ui.sideCollapsed = !!parsed.sideCollapsed;
+    if (Number(parsed.w) >= PREVIEW_MIN) state.ui.w = Math.round(Number(parsed.w));
+    if (Number(parsed.h) >= PREVIEW_MIN) state.ui.h = Math.round(Number(parsed.h));
+  } catch (err) {
+    /* 忽略损坏的偏好，用默认值 */
+  }
+}
 
 function scheduleSave() {
   window.clearTimeout(saveTimer);
@@ -957,6 +996,96 @@ function renderScript(block) {
     </div>`;
 }
 
+/* ========================= 预览面板（折叠 / 尺寸） ========================= */
+
+/** 窄屏时预览面板在页面底部，宽屏时在右侧 */
+function isBottomPreview() {
+  return window.matchMedia('(max-width: 1280px)').matches;
+}
+
+/** 把 remember 的尺寸写进 CSS 变量；宽屏=宽度，窄屏=高度 */
+function applyPreviewSize() {
+  const size = isBottomPreview() ? state.ui.h : state.ui.w;
+  el.app.style.setProperty('--preview-size', `${size}px`);
+}
+
+function setSideCollapsed(collapsed) {
+  state.ui.sideCollapsed = !!collapsed;
+  el.app.classList.toggle('is-side-collapsed', state.ui.sideCollapsed);
+  el.sidebar.classList.toggle('is-collapsed', state.ui.sideCollapsed);
+  el.sidebarToggle.setAttribute('aria-expanded', String(!state.ui.sideCollapsed));
+  saveUi();
+}
+
+function setPreviewCollapsed(collapsed) {
+  state.ui.collapsed = !!collapsed;
+  el.app.classList.toggle('is-preview-collapsed', state.ui.collapsed);
+  el.preview.classList.toggle('is-collapsed', state.ui.collapsed);
+  el.previewToggle.setAttribute('aria-expanded', String(!state.ui.collapsed));
+  saveUi();
+}
+
+function bindPreviewResizer() {
+  let axis = 'x';
+  let startPoint = 0;
+  let startSize = 0;
+
+  const onMove = (event) => {
+    const point = axis === 'x' ? event.clientX : event.clientY;
+    /* 宽屏向左拖变大，窄屏向上拖变大，所以都是 start - current */
+    const delta = startPoint - point;
+    const viewport = axis === 'x' ? window.innerWidth : window.innerHeight;
+    const max = viewport * PREVIEW_MAX_RATIO;
+    const size = Math.min(max, Math.max(PREVIEW_MIN, startSize + delta));
+    if (axis === 'x') state.ui.w = Math.round(size);
+    else state.ui.h = Math.round(size);
+    applyPreviewSize();
+  };
+
+  const onUp = () => {
+    el.previewResizer.classList.remove('is-active');
+    document.removeEventListener('pointermove', onMove);
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    saveUi();
+  };
+
+  el.previewResizer.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    axis = isBottomPreview() ? 'y' : 'x';
+    startPoint = axis === 'x' ? event.clientX : event.clientY;
+    startSize = axis === 'x' ? state.ui.w : state.ui.h;
+    el.previewResizer.classList.add('is-active');
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = axis === 'x' ? 'col-resize' : 'row-resize';
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp, { once: true });
+  });
+
+  /* 跨越 1280px 断点时要换一套尺寸，重新套用一次 */
+  window.addEventListener('resize', applyPreviewSize);
+}
+
+/** 导出按钮跟着当前页签变：.plugin 页导出插件，脚本页下载 JS，校验页不显示 */
+function updateExportButton() {
+  const tab = state.tab;
+  if (tab === 'plugin') {
+    el.exportBtn.hidden = false;
+    el.exportLabel.textContent = '导出 .plugin';
+    el.exportBtn.title = '把生成的插件文件保存到本地';
+  } else if (tab === 'script') {
+    el.exportBtn.hidden = false;
+    el.exportLabel.textContent = '下载 JS';
+    el.exportBtn.title = '把脚本代码导出为 .js 文件';
+  } else {
+    el.exportBtn.hidden = true;
+  }
+  /* 校验面板没有可复制的文本 */
+  el.copyBtn.hidden = tab === 'issues';
+  /* 复写语法只影响 .plugin 输出，别的页签下藏着 */
+  el.previewFoot.hidden = tab !== 'plugin';
+}
+
 /* ========================= 渲染：预览 ========================= */
 
 function renderPreview() {
@@ -1007,6 +1136,7 @@ function renderPreview() {
     }</code>`;
   }
 
+  updateExportButton();
   updateChrome(errors, warns);
 }
 
@@ -1139,10 +1269,18 @@ function bindEvents() {
   el.canvas.addEventListener('change', (event) => onCanvasField(event, true));
   bindDragAndDrop();
 
-  /* --- 顶部导出 --- */
-  el.downloadBtn.addEventListener('click', downloadPlugin);
-  el.downloadScriptBtn.addEventListener('click', downloadScripts);
+  /* --- 预览区：复制 / 导出 / 折叠 / 拖拽尺寸 --- */
+  el.exportBtn.addEventListener('click', () => {
+    /* 导出按钮跟着页签走，点它永远导出「当前正在看的东西」 */
+    if (state.tab === 'script') downloadScripts();
+    else downloadPlugin();
+  });
   el.copyBtn.addEventListener('click', copyCurrent);
+  el.previewToggle.addEventListener('click', () => setPreviewCollapsed(true));
+  el.previewExpand.addEventListener('click', () => setPreviewCollapsed(false));
+  el.sidebarToggle.addEventListener('click', () => setSideCollapsed(true));
+  el.sidebarExpand.addEventListener('click', () => setSideCollapsed(false));
+  bindPreviewResizer();
 
   /* --- Tabs --- */
   el.tabs.addEventListener('click', (event) => {
@@ -1482,5 +1620,9 @@ function toast(message) {
 /* ========================= 启动 ========================= */
 
 loadState();
+loadUi();
 bindEvents();
+applyPreviewSize();
+setPreviewCollapsed(state.ui.collapsed);
+setSideCollapsed(state.ui.sideCollapsed);
 renderAll();

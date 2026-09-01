@@ -7,19 +7,26 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app">
+    <div class="app" id="app">
       <!-- ============ 左侧：插件列表 ============ -->
-      <aside class="sidebar">
+      <aside class="sidebar" id="sidebar">
         <div class="brand">
           <div class="brand-mark">L</div>
           <div class="brand-text">
             <strong>Loon Studio</strong>
             <span>插件可视化工作台</span>
           </div>
+          <button id="sidebarToggle" class="sidebar-toggle" title="收起侧栏" aria-label="收起侧栏">
+            <span class="chev">«</span>
+          </button>
         </div>
 
+        <button id="sidebarExpand" class="sidebar-expand" title="展开侧栏" aria-label="展开侧栏">
+          <span class="chev">»</span>
+        </button>
+
         <button id="newPluginBtn" class="btn btn-primary btn-block">
-          <span class="ico">＋</span> 新建插件
+          <span class="ico">＋</span><span class="btn-label">新建插件</span>
         </button>
 
         <div class="side-section">
@@ -53,35 +60,44 @@
               </button>
               <div id="blockPalette" class="popover" hidden></div>
             </div>
-            <button id="downloadBtn" class="btn btn-primary">
-              <span class="ico">↓</span> 导出 .plugin
-            </button>
           </div>
         </header>
 
         <div id="builderCanvas" class="canvas"></div>
       </main>
 
-      <!-- ============ 右侧：实时预览 ============ -->
-      <aside class="preview">
+      <!-- ============ 右侧 / 底部：实时预览（可折叠） ============ -->
+      <aside class="preview" id="preview">
         <div class="preview-head">
           <div class="tabs" id="tabs" role="tablist">
             <button class="tab is-active" data-tab="plugin" role="tab">.plugin</button>
             <button class="tab" data-tab="script" role="tab">脚本 .js</button>
             <button class="tab" data-tab="issues" role="tab">校验 <span id="issueCount" class="pill">0</span></button>
           </div>
+
           <div class="preview-tools">
             <button id="copyBtn" class="btn btn-ghost btn-sm">复制</button>
-            <button id="downloadScriptBtn" class="btn btn-ghost btn-sm">下载 JS</button>
+            <button id="exportBtn" class="btn btn-primary btn-sm">
+              <span class="ico">↓</span><span id="exportLabel">导出 .plugin</span>
+            </button>
           </div>
+
+          <button id="previewToggle" class="preview-toggle" title="折叠预览面板" aria-label="折叠预览面板">
+            <span class="chev">⌄</span>
+          </button>
+          <button id="previewExpand" class="preview-expand" title="展开预览面板" aria-label="展开预览面板">
+            <span class="chev">⌃</span><span class="expand-text">展开预览</span>
+          </button>
         </div>
+
+        <div id="previewResizer" class="preview-resizer" role="separator" title="拖拽调整大小"></div>
 
         <div class="preview-body">
           <pre id="codePreview" class="code"><code></code></pre>
           <div id="issuesPanel" class="issues" hidden></div>
         </div>
 
-        <div class="preview-foot">
+        <div class="preview-foot" id="previewFoot">
           <label class="mini-field">
             <span>复写区块语法</span>
             <select id="rewriteSyntax">

@@ -61,6 +61,12 @@
 
   --sidebar-w: 264px;
   --preview-w: 420px;
+
+  /* 面板折叠后剩余的那条「把手」尺寸 */
+  --preview-bar: 44px;
+  --sidebar-bar: 52px;
+  /* 由 JS 拖拽写入，右侧模式=宽度、底部模式=高度 */
+  --preview-size: var(--preview-w);
 }
 
 /* =========================================================
@@ -262,8 +268,22 @@ textarea {
 .app {
   display: grid;
   grid-template-areas: "side main preview";
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--preview-w);
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--preview-size);
   height: 100vh;
+}
+
+/* 折叠：面板收成一条把手，画布吃掉全部剩余空间。
+   两个类可以同时命中，所以组合态要写在最后 */
+.app.is-preview-collapsed {
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--preview-bar);
+}
+
+.app.is-side-collapsed {
+  grid-template-columns: var(--sidebar-bar) minmax(0, 1fr) var(--preview-size);
+}
+
+.app.is-side-collapsed.is-preview-collapsed {
+  grid-template-columns: var(--sidebar-bar) minmax(0, 1fr) var(--preview-bar);
 }
 
 /* ---------- 侧栏 ---------- */
@@ -312,6 +332,83 @@ textarea {
 .brand-text span {
   font-size: 11.5px;
   color: var(--muted);
+}
+
+/* ---------- 侧栏折叠 ---------- */
+
+.sidebar-toggle,
+.sidebar-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--r-xs);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sidebar-toggle {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.sidebar-toggle:hover,
+.sidebar-expand:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.sidebar-expand {
+  display: none;
+  width: 100%;
+  height: 30px;
+  font-size: 14px;
+}
+
+.sidebar.is-collapsed {
+  padding: var(--sp-4) 6px;
+  gap: var(--sp-3);
+  align-items: center;
+  overflow: hidden;
+}
+
+.sidebar.is-collapsed .brand-text,
+.sidebar.is-collapsed .sidebar-toggle,
+.sidebar.is-collapsed .side-section,
+.sidebar.is-collapsed .side-foot {
+  display: none;
+}
+
+.sidebar.is-collapsed .brand {
+  padding: 0;
+}
+
+/* 折叠后「新建插件」退化成一个圆形图标按钮，高频操作不丢 */
+.sidebar.is-collapsed #newPluginBtn {
+  width: 36px;
+  height: 36px;
+  min-height: 0;
+  padding: 0;
+  border-radius: var(--r-full);
+}
+
+.sidebar.is-collapsed #newPluginBtn .btn-label {
+  display: none;
+}
+
+.sidebar.is-collapsed #newPluginBtn .ico {
+  margin: 0;
+  font-size: 15px;
+}
+
+.sidebar.is-collapsed .sidebar-expand {
+  display: inline-flex;
 }
 
 .side-section {
@@ -861,6 +958,123 @@ textarea {
   border-bottom: 1px solid var(--line);
 }
 
+/* ---------- 折叠 / 展开把手 ---------- */
+
+.preview-toggle,
+.preview-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--r-xs);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.preview-toggle {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.preview-toggle:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* 右侧模式下折叠成竖条，文字竖排、箭头转向左 */
+.preview-expand {
+  display: none;
+  width: 100%;
+  height: 100%;
+  padding: 10px 0;
+  writing-mode: vertical-rl;
+  flex-direction: column;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  background: var(--surface-2);
+}
+
+.preview-expand:hover {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+
+.preview-resizer {
+  flex: none;
+  width: 7px;
+  cursor: col-resize;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s ease;
+}
+
+.preview-resizer:hover,
+.preview-resizer.is-active {
+  background: var(--brand-soft);
+}
+
+.preview-resizer::after {
+  content: '';
+  width: 3px;
+  height: 46px;
+  border-radius: var(--r-full);
+  background: var(--line-2);
+  transition: background 0.15s ease;
+}
+
+.preview-resizer:hover::after,
+.preview-resizer.is-active::after {
+  background: var(--brand);
+}
+
+/* ---------- 折叠态 ---------- */
+
+.preview.is-collapsed {
+  overflow: hidden;
+}
+
+.preview.is-collapsed .preview-head {
+  padding: 0;
+  border-bottom: none;
+  height: 100%;
+}
+
+.preview.is-collapsed .tabs,
+.preview.is-collapsed .preview-tools,
+.preview.is-collapsed .preview-toggle,
+.preview.is-collapsed .preview-resizer,
+.preview.is-collapsed .preview-body,
+.preview.is-collapsed .preview-foot {
+  display: none;
+}
+
+.preview.is-collapsed .preview-expand {
+  display: inline-flex;
+}
+
+/* 右侧模式：chevron 转向左右 */
+.preview.is-collapsed .preview-expand .chev,
+.preview-toggle .chev {
+  display: inline-block;
+  transform: rotate(-90deg);
+}
+
+/* 底部模式（≤1280px）改回上下方向 */
+@media (max-width: 1280px) {
+  .preview.is-collapsed .preview-expand .chev,
+  .preview-toggle .chev {
+    transform: none;
+  }
+}
+
 .tabs {
   display: flex;
   gap: 2px;
@@ -1132,12 +1346,40 @@ textarea {
   .app {
     grid-template-areas: "side main" "side preview";
     grid-template-columns: 240px minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) 320px;
+    grid-template-rows: minmax(0, 1fr) var(--preview-size);
+  }
+
+  .app.is-preview-collapsed {
+    grid-template-rows: minmax(0, 1fr) var(--preview-bar);
+  }
+
+  /* 这里只改列宽，与上面改行高的折叠态互不冲突 */
+  .app.is-side-collapsed {
+    grid-template-columns: var(--sidebar-bar) minmax(0, 1fr);
   }
 
   .preview {
     border-left: 1px solid var(--line);
     border-top: 1px solid var(--line);
+  }
+
+  /* 底部模式下拖拽条是横的，光标和命中区跟着变 */
+  .preview-resizer {
+    width: auto;
+    height: 7px;
+    cursor: row-resize;
+  }
+
+  .preview-resizer::after {
+    width: 46px;
+    height: 3px;
+  }
+
+  /* 底部模式折叠后把手是横条，文字正常横排 */
+  .preview-expand {
+    writing-mode: horizontal-tb;
+    flex-direction: row;
+    gap: 6px;
   }
 
   .workspace {
@@ -1164,6 +1406,23 @@ textarea {
     border-bottom: 1px solid var(--line);
   }
 
+  /* 单栏时侧栏是顶部横条，折叠后压成一条矮条并改为横排 */
+  .app.is-side-collapsed {
+    grid-template-rows: var(--sidebar-bar) auto auto;
+  }
+
+  .app.is-side-collapsed .sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: 6px var(--sp-4);
+  }
+
+  .app.is-side-collapsed .sidebar-expand {
+    width: 30px;
+    height: 30px;
+  }
+
   .side-section {
     overflow: visible;
   }
@@ -1180,8 +1439,14 @@ textarea {
   }
 
   .preview {
-    height: 70vh;
+    height: var(--preview-size);
+    min-height: 220px;
     border-left: none;
+  }
+
+  .app.is-preview-collapsed .preview {
+    height: var(--preview-bar);
+    min-height: 0;
   }
 
   .grid {
