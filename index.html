@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Loon Plugin Studio · 插件可视化工作台</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260902-ui" />
   </head>
   <body>
     <div class="app" id="app">
@@ -16,17 +16,14 @@
             <strong>Loon Studio</strong>
             <span>插件可视化工作台</span>
           </div>
-          <button id="sidebarToggle" class="sidebar-toggle" title="收起侧栏" aria-label="收起侧栏">
-            <span class="chev">«</span>
-          </button>
         </div>
 
         <button id="sidebarExpand" class="sidebar-expand" title="展开侧栏" aria-label="展开侧栏">
-          <span class="chev">»</span>
+          <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
         </button>
 
         <button id="newPluginBtn" class="btn btn-primary btn-block">
-          <span class="ico">＋</span><span class="btn-label">新建插件</span>
+          <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg><span class="btn-label">新建插件</span>
         </button>
 
         <div class="side-section">
@@ -37,6 +34,10 @@
         <div class="side-foot">
           <div id="saveHint" class="save-hint">草稿自动保存在本机浏览器</div>
           <button id="resetBtn" class="btn btn-ghost btn-block btn-sm">恢复示例插件</button>
+          <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-expanded="true">
+            <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18 9 12l6-6" /></svg>
+            <span>收起侧栏</span>
+          </button>
         </div>
       </aside>
 
@@ -56,7 +57,7 @@
           <div class="topbar-right">
             <div class="anchor">
               <button id="addBlockBtn" class="btn btn-soft" aria-haspopup="true" aria-expanded="false">
-                <span class="ico">＋</span> 添加区块
+                <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg> 添加区块
               </button>
               <div id="blockPalette" class="popover" hidden></div>
             </div>
@@ -78,15 +79,16 @@
           <div class="preview-tools">
             <button id="copyBtn" class="btn btn-ghost btn-sm">复制</button>
             <button id="exportBtn" class="btn btn-primary btn-sm">
-              <span class="ico">↓</span><span id="exportLabel">导出 .plugin</span>
+              <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" /></svg><span id="exportLabel">导出 .plugin</span>
             </button>
           </div>
 
-          <button id="previewToggle" class="preview-toggle" title="折叠预览面板" aria-label="折叠预览面板">
-            <span class="chev">⌄</span>
+          <button id="previewToggle" class="preview-toggle" type="button" aria-expanded="true">
+            <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6" /></svg>
+            <span>收起预览</span>
           </button>
-          <button id="previewExpand" class="preview-expand" title="展开预览面板" aria-label="展开预览面板">
-            <span class="chev">⌃</span><span class="expand-text">展开预览</span>
+          <button id="previewExpand" class="preview-expand" type="button" aria-expanded="false">
+            <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg><span class="expand-text">展开预览</span>
           </button>
         </div>
 
@@ -111,6 +113,6 @@
 
     <div id="toast" class="toast" hidden></div>
 
-    <script src="./app.js"></script>
+    <script src="./app.js?v=20260902-ui"></script>
   </body>
 </html>

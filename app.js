@@ -79,11 +79,11 @@ const REWRITE_TYPES = [
 
 /** 区块元信息 */
 const BLOCK_META = {
-  details: { title: '详情', desc: '#!name / #!desc / #!icon 等元信息', badge: '①' },
-  hostnames: { title: '主机名', desc: '[MITM] 需要解密的主机名', badge: '②' },
-  rules: { title: '规则', desc: '[Rule] 分流 / 拦截策略', badge: '③' },
-  rewrite: { title: '复写', desc: '[URL Rewrite] 重定向与改写', badge: '④' },
-  script: { title: '脚本', desc: '[Script] 挂载 JS 脚本', badge: '⑤' }
+  details: { title: '详情', desc: '#!name / #!desc / #!icon 等元信息', badge: '信息' },
+  hostnames: { title: '主机名', desc: '[MITM] 需要解密的主机名', badge: 'MITM' },
+  rules: { title: '规则', desc: '[Rule] 分流 / 拦截策略', badge: '规则' },
+  rewrite: { title: '复写', desc: '[URL Rewrite] 重定向与改写', badge: '复写' },
+  script: { title: '脚本', desc: '[Script] 挂载 JS 脚本', badge: 'JS' }
 };
 
 /** 区块默认数据 */
@@ -170,6 +170,17 @@ const PREVIEW_MAX_RATIO = 0.75;
 /* ========================= 工具 ========================= */
 
 const $ = (sel) => document.querySelector(sel);
+
+const ICONS = {
+  grip: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg>',
+  chevronUp: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></svg>',
+  chevronDown: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>',
+  up: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m12 19V5m0 0-5 5m5-5 5 5"/></svg>',
+  down: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14m0 0 5-5m-5 5-5-5"/></svg>',
+  copy: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  more: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>',
+  trash: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-3h4l1 3m-9 0 1 13h10l1-13"/></svg>'
+};
 
 function uid() {
   if (window.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -745,7 +756,7 @@ function renderSidebar() {
       (plugin) => `
       <div class="plugin-item ${plugin.id === state.selectedId ? 'is-active' : ''}" data-plugin-id="${plugin.id}" role="button" tabindex="0">
         <span class="p-name">${escapeHtml(plugin.name || '未命名插件')}</span>
-        <button class="btn-icon is-danger p-del" data-act="del-plugin" data-plugin-id="${plugin.id}" title="删除插件">✕</button>
+        <button class="btn-icon is-danger p-del" data-act="del-plugin" data-plugin-id="${plugin.id}" title="删除插件" aria-label="删除插件 ${escapeHtml(plugin.name || '未命名插件')}">${ICONS.trash}</button>
       </div>`
     )
     .join('');
@@ -767,7 +778,7 @@ function renderCanvas() {
         <p>从下面挑一个区块开始，或者直接点右上角「添加区块」。</p>
         <div class="empty-actions">
           ${Object.keys(BLOCK_META)
-            .map((type) => `<button class="btn btn-soft btn-sm" data-act="add-block" data-type="${type}">＋ ${BLOCK_META[type].title}</button>`)
+            .map((type) => `<button class="btn btn-soft btn-sm" data-act="add-block" data-type="${type}">添加${BLOCK_META[type].title}</button>`)
             .join('')}
         </div>
       </div>`;
@@ -780,20 +791,30 @@ function renderBlock(block, index) {
   const meta = BLOCK_META[block.type] || { title: block.type, desc: '', badge: '·' };
   const total = currentPlugin().blocks.length;
   return `
-    <article class="card ${block.collapsed ? 'is-collapsed' : ''}" data-id="${block.id}">
+    <article class="card card--${escapeHtml(block.type)} ${block.collapsed ? 'is-collapsed' : ''}" data-id="${block.id}">
       <header class="card-head">
-        <button class="drag-handle" type="button" title="按住拖动排序" aria-label="拖动排序">⠿</button>
-        <span class="card-badge">${meta.badge}</span>
+        <button class="drag-handle" type="button" title="按住拖动排序" aria-label="拖动排序">${ICONS.grip}</button>
+        <span class="card-badge" aria-hidden="true">${meta.badge}</span>
         <div class="card-title">
           <strong>${escapeHtml(meta.title)}</strong>
           <span>${escapeHtml(meta.desc)}</span>
         </div>
         <div class="card-tools">
-          <button class="btn-icon" type="button" data-act="collapse" data-id="${block.id}" title="${block.collapsed ? '展开' : '折叠'}">${block.collapsed ? '⌄' : '⌃'}</button>
-          <button class="btn-icon" type="button" data-act="up" data-id="${block.id}" title="上移" ${index === 0 ? 'disabled' : ''}>↑</button>
-          <button class="btn-icon" type="button" data-act="down" data-id="${block.id}" title="下移" ${index === total - 1 ? 'disabled' : ''}>↓</button>
-          <button class="btn-icon" type="button" data-act="dup" data-id="${block.id}" title="复制区块">⧉</button>
-          <button class="btn-icon is-danger" type="button" data-act="del" data-id="${block.id}" title="删除区块">✕</button>
+          <button class="card-toggle" type="button" data-act="collapse" data-id="${block.id}" aria-expanded="${String(!block.collapsed)}">
+            ${block.collapsed ? ICONS.chevronDown : ICONS.chevronUp}<span>${block.collapsed ? '展开' : '收起'}</span>
+          </button>
+          <div class="card-order" role="group" aria-label="区块排序">
+            <span>排序</span>
+            <button type="button" data-act="up" data-id="${block.id}" title="上移" aria-label="上移区块" ${index === 0 ? 'disabled' : ''}>${ICONS.up}</button>
+            <button type="button" data-act="down" data-id="${block.id}" title="下移" aria-label="下移区块" ${index === total - 1 ? 'disabled' : ''}>${ICONS.down}</button>
+          </div>
+          <details class="card-more">
+            <summary aria-label="更多区块操作">${ICONS.more}<span>更多</span></summary>
+            <div class="card-menu" role="group" aria-label="更多区块操作">
+              <button type="button" data-act="dup" data-id="${block.id}">${ICONS.copy}<span>复制区块</span></button>
+              <button class="is-danger" type="button" data-act="del" data-id="${block.id}">${ICONS.trash}<span>删除区块</span></button>
+            </div>
+          </details>
         </div>
       </header>
       <div class="card-body">${renderBlockBody(block)}</div>
@@ -909,7 +930,7 @@ function renderRuleRows(conditions, blockId, parentPath) {
           ${policyField}
           ${valueField}
           <div class="row-actions">
-            <button class="btn-icon is-danger" type="button" data-act="del-cond" data-id="${blockId}" data-path="${path}" title="删除">✕</button>
+            <button class="btn-icon is-danger" type="button" data-act="del-cond" data-id="${blockId}" data-path="${path}" title="删除规则" aria-label="删除规则">${ICONS.trash}</button>
           </div>
         </div>
         ${subtree}`;
@@ -938,7 +959,7 @@ function renderRewrite(block) {
             <select data-field="type">${optionsHtml(REWRITE_TYPES, item.type || '302')}</select>
           </div>
           <div class="row-actions">
-            <button class="btn-icon is-danger" type="button" data-act="del-rewrite" data-idx="${idx}" title="删除">✕</button>
+            <button class="btn-icon is-danger" type="button" data-act="del-rewrite" data-idx="${idx}" title="删除复写" aria-label="删除复写">${ICONS.trash}</button>
           </div>
         </div>`
         )
@@ -1000,7 +1021,7 @@ function renderScript(block) {
 
 /** 窄屏时预览面板在页面底部，宽屏时在右侧 */
 function isBottomPreview() {
-  return window.matchMedia('(max-width: 1280px)').matches;
+  return window.matchMedia('(max-width: 1180px)').matches;
 }
 
 /** 把 remember 的尺寸写进 CSS 变量；宽屏=宽度，窄屏=高度 */
@@ -1014,6 +1035,7 @@ function setSideCollapsed(collapsed) {
   el.app.classList.toggle('is-side-collapsed', state.ui.sideCollapsed);
   el.sidebar.classList.toggle('is-collapsed', state.ui.sideCollapsed);
   el.sidebarToggle.setAttribute('aria-expanded', String(!state.ui.sideCollapsed));
+  el.sidebarExpand.setAttribute('aria-expanded', String(!state.ui.sideCollapsed));
   saveUi();
 }
 
@@ -1022,6 +1044,7 @@ function setPreviewCollapsed(collapsed) {
   el.app.classList.toggle('is-preview-collapsed', state.ui.collapsed);
   el.preview.classList.toggle('is-collapsed', state.ui.collapsed);
   el.previewToggle.setAttribute('aria-expanded', String(!state.ui.collapsed));
+  el.previewExpand.setAttribute('aria-expanded', String(!state.ui.collapsed));
   saveUi();
 }
 
@@ -1062,7 +1085,7 @@ function bindPreviewResizer() {
     document.addEventListener('pointerup', onUp, { once: true });
   });
 
-  /* 跨越 1280px 断点时要换一套尺寸，重新套用一次 */
+  /* 跨越 1180px 断点时要换一套尺寸，重新套用一次 */
   window.addEventListener('resize', applyPreviewSize);
 }
 
@@ -1228,8 +1251,8 @@ function bindEvents() {
   el.palette.innerHTML = Object.keys(BLOCK_META)
     .map(
       (type) => `
-      <button class="palette-item" type="button" data-act="add-block" data-type="${type}">
-        <span class="palette-ico">${BLOCK_META[type].badge}</span>
+      <button class="palette-item palette-item--${type}" type="button" data-act="add-block" data-type="${type}">
+        <span class="palette-ico" aria-hidden="true">${BLOCK_META[type].badge}</span>
         <span class="palette-text"><strong>${BLOCK_META[type].title}</strong><span>${BLOCK_META[type].desc}</span></span>
       </button>`
     )
