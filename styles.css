@@ -26,13 +26,21 @@
   --details-soft: #eef2ff;
   --details-line: #c7d2fe;
   /* 主机名 · Cyan */
-  --hostnames: #0891b2;
-  --hostnames-soft: #ecfeff;
-  --hostnames-line: #a5f3fc;
+  --argument: #c026d3;
+  --argument-soft: #fdf4ff;
+  --argument-line: #f5d0fe;
+
+  --general: #64748b;
+  --general-soft: #f1f5f9;
+  --general-line: #e2e8f0;
   /* 规则 · Violet */
   --rules: #7c3aed;
   --rules-soft: #f5f3ff;
   --rules-line: #ddd6fe;
+
+  --host: #0284c7;
+  --host-soft: #f0f9ff;
+  --host-line: #bae6fd;
   /* 复写 · Amber */
   --rewrite: #d97706;
   --rewrite-soft: #fffbeb;
@@ -41,6 +49,10 @@
   --script: #059669;
   --script-soft: #ecfdf5;
   --script-line: #a7f3d0;
+
+  --mitm: #e11d48;
+  --mitm-soft: #fff1f2;
+  --mitm-line: #fecdd3;
 
   /* ---------- 中性 · Slate ---------- */
   --bg: #f5f7fc;           /* 略带蓝调的底 */
@@ -882,10 +894,15 @@ select {
   --item-soft: var(--details-soft);
   --item-line: var(--details-line);
 }
-.palette-item--hostnames {
-  --item-color: var(--hostnames);
-  --item-soft: var(--hostnames-soft);
-  --item-line: var(--hostnames-line);
+.palette-item--argument {
+  --item-color: var(--argument);
+  --item-soft: var(--argument-soft);
+  --item-line: var(--argument-line);
+}
+.palette-item--general {
+  --item-color: var(--general);
+  --item-soft: var(--general-soft);
+  --item-line: var(--general-line);
 }
 .palette-item--rules {
   --item-color: var(--rules);
@@ -897,10 +914,20 @@ select {
   --item-soft: var(--rewrite-soft);
   --item-line: var(--rewrite-line);
 }
+.palette-item--host {
+  --item-color: var(--host);
+  --item-soft: var(--host-soft);
+  --item-line: var(--host-line);
+}
 .palette-item--script {
   --item-color: var(--script);
   --item-soft: var(--script-soft);
   --item-line: var(--script-line);
+}
+.palette-item--mitm {
+  --item-color: var(--mitm);
+  --item-soft: var(--mitm-soft);
+  --item-line: var(--mitm-line);
 }
 
 .palette-text {
@@ -1007,10 +1034,15 @@ select {
   --card-soft: var(--details-soft);
   --card-line: var(--details-line);
 }
-.card--hostnames {
-  --card-color: var(--hostnames);
-  --card-soft: var(--hostnames-soft);
-  --card-line: var(--hostnames-line);
+.card--argument {
+  --card-color: var(--argument);
+  --card-soft: var(--argument-soft);
+  --card-line: var(--argument-line);
+}
+.card--general {
+  --card-color: var(--general);
+  --card-soft: var(--general-soft);
+  --card-line: var(--general-line);
 }
 .card--rules {
   --card-color: var(--rules);
@@ -1022,10 +1054,20 @@ select {
   --card-soft: var(--rewrite-soft);
   --card-line: var(--rewrite-line);
 }
+.card--host {
+  --card-color: var(--host);
+  --card-soft: var(--host-soft);
+  --card-line: var(--host-line);
+}
 .card--script {
   --card-color: var(--script);
   --card-soft: var(--script-soft);
   --card-line: var(--script-line);
+}
+.card--mitm {
+  --card-color: var(--mitm);
+  --card-soft: var(--mitm-soft);
+  --card-line: var(--mitm-line);
 }
 
 .card.is-dragging {
@@ -1373,7 +1415,73 @@ select {
 }
 
 .row.is-rewrite {
-  grid-template-columns: minmax(0, 2fr) minmax(0, 2fr) 150px var(--ctl-sm);
+  grid-template-columns: 120px minmax(0, 1fr) 130px var(--ctl-sm);
+}
+
+/* 复写条目容器：头部条件行 + Action 列表 */
+.rewrite-item {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.rewrite-item .row {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-left: 14px;
+  border-left: 2px solid var(--rewrite-line);
+}
+
+/* 单个 Action 行：方法选择 + N 个参数位 */
+.row.is-action {
+  grid-template-columns: 210px repeat(auto-fit, minmax(140px, 1fr)) var(--ctl-sm);
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+/* 参数条目：两行布局（第二行 desc 占满） */
+.row.is-argument {
+  grid-template-columns: minmax(0, 1.1fr) 150px minmax(0, 1.4fr) minmax(0, 1fr) auto;
+}
+
+/* Host 条目 */
+.row.is-host {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) var(--ctl-sm);
+}
+
+.field.grow {
+  flex: 1;
+}
+
+/* 「数字」这类行内勾选 */
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--brand);
 }
 
 .row .field {
@@ -1598,8 +1706,7 @@ select {
 .preview.is-collapsed .preview-tools,
 .preview.is-collapsed .preview-toggle,
 .preview.is-collapsed .preview-resizer,
-.preview.is-collapsed .preview-body,
-.preview.is-collapsed .preview-foot {
+.preview.is-collapsed .preview-body {
   display: none;
 }
 
@@ -1824,27 +1931,6 @@ select {
   text-underline-offset: 2px;
 }
 
-.preview-foot {
-  padding: 10px 14px;
-  border-top: 1px solid var(--line);
-  background: var(--surface-2);
-}
-
-.mini-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.mini-field select {
-  flex: 1;
-  min-height: 0;
-  padding: 5px 8px;
-  font-size: 12px;
-}
-
 /* =========================================================
    Toast
    ========================================================= */
@@ -2044,7 +2130,10 @@ select {
   }
 
   .row,
-  .row.is-rewrite {
+  .row.is-rewrite,
+  .row.is-argument,
+  .row.is-action,
+  .row.is-host {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 

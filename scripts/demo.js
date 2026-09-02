@@ -1,17 +1,15 @@
 /**
- * Loon JS 脚本示例（http-response）
+ * Loon JS 脚本示例（response Script · 983 新语法挂载）
  * 挂在：^https?:\/\/api\.example\.com\/v1\/user
  *
  * 关键点：
- *   1. 必须 requires-body=true，否则 $response.body 为空
+ *   1. 插件里 requires_body=true，否则 $response.body 为空
  *   2. 解析失败时一定要 $done({}) 把原始响应放回去，别让脚本抛异常
- *   3. 脚本写在 .js 文件里，.plugin 只能通过 script-path 引用，不能内嵌代码
+ *   3. .plugin 里通过 script("...", {${token}}) 传对象参数，$argument 是对象
  */
 
-// 可选：读取 .plugin 里 argument= 传进来的参数
-// const arg = Object.fromEntries(
-//   ($argument || '').split('&').filter(Boolean).map((kv) => kv.split('='))
-// );
+// $argument 由插件 [Argument] 的对象传参生成：{ token: "用户填的值" }
+const { token } = $argument || {};
 
 let body;
 try {
@@ -27,6 +25,7 @@ if (!body || typeof body !== 'object') {
   body.data = body.data || {};
   body.data.demo = true;
   body.data.message = 'Hello from Loon plugin demo';
+  body.data.token = token || '';
 
   $done({
     status: $response.status || 200,

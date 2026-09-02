@@ -1,19 +1,30 @@
 /* =============================================================================
  * Loon Plugin Studio
  * -----------------------------------------------------------------------------
- * 语法依据（Loon 官方文档）：
- *   插件元信息：#!name / #!desc / #!icon / #!author / #!homepage / #!tag / #!system
- *   插件可用区块：[Rule] / [URL Rewrite] / [Script] / [MITM]
- *   MITM：        hostname = a.com, b.com        （逗号分隔，单行）
- *   逻辑规则：    AND,((子规则),(子规则)),策略    （子规则不带策略；NOT 只接受 1 个）
- *   插件策略限制：DIRECT / PROXY / REJECT 系列
- *   脚本参数：    script-path=, requires-body=, timeout=, tag=, enable=, argument=
+ * 语法依据（官方文档 https://nsloon.app/docs/Plugin/）：
+ *
+ *   插件共 8 个区块，顺序与文档一致：
+ *     详情(#!) / [Argument] / [General] / [Rule] / [Rewrite] / [Host] / [Script] / [Mitm]
+ *
+ *   复写统一使用 Loon 3.5.1 (978) 新语法：
+ *     <phase> if <condition> then <action>[ | <action> ...]
+ *
+ *   脚本统一使用 Loon 3.5.1 (983) 新语法：
+ *     HTTP            <request|response> if <condition> then script(<path>[, <argument>]) [with <options>]
+ *     Cron            cron <expr> then script(...) [with <options>]
+ *     Network Changed network-changed then script(...) [with <options>]
+ *     Generic         generic then script(...) [with <options>]
+ *
+ *   插件参数：Rewrite / Script 条件里写 ${name}；脚本 $argument 对象写 {${a}, ${b}}
+ *   插件规则策略：只能用 DIRECT / PROXY / REJECT 系列
  * ========================================================================== */
 'use strict';
 
 /* ========================= 常量 ========================= */
 
-const STORE_KEY = 'loon-plugin-studio.v1';
+/* v1 存的是 8 区块改造前的旧结构（hostnames 区块、旧复写/脚本数据形状），
+   升 key 直接丢弃旧草稿，避免迁移逻辑把半兼容数据带进来 */
+const STORE_KEY = 'loon-plugin-studio.v2';
 const UI_STORE_KEY = 'loon-plugin-studio.ui.v1';
 
 /** 规则类型 */
@@ -54,37 +65,90 @@ const POLICIES = [
 ];
 const POLICY_SET = new Set(POLICIES.map((p) => p.v));
 
-/** 脚本类型 */
-const SCRIPT_TYPES = [
-  { v: 'http-response', label: 'http-response · 响应返回后', match: '匹配 URL 正则', body: true },
-  { v: 'http-request', label: 'http-request · 请求发出前', match: '匹配 URL 正则', body: true },
-  { v: 'cron', label: 'cron · 定时执行', match: 'Cron 表达式', body: false },
-  { v: 'network-changed', label: 'network-changed · 网络变化', match: '', body: false },
-  { v: 'generic', label: 'generic · 手动触发', match: '', body: false }
+/** 脚本类型（Loon 3.5.1 (983) 新语法）
+ *  cond: true=HTTP 条件表达式 | 'cron'=Cron 表达式 | false=无需条件
+ *  body: 是否支持 requires_body / binary_body_mode */
+const SCRIPT_KINDS = [
+  { v: 'request', label: 'request · 请求发出前', cond: true, body: true },
+  { v: 'response', label: 'response · 响应返回后', cond: true, body: true },
+  { v: 'cron', label: 'cron · 定时执行', cond: 'cron', body: false },
+  { v: 'network-changed', label: 'network-changed · 网络变化', cond: false, body: false },
+  { v: 'generic', label: 'generic · 手动触发', cond: false, body: false }
 ];
 
-/** 复写类型 */
-const REWRITE_TYPES = [
-  { v: '302', label: '302 临时重定向', target: true },
-  { v: '301', label: '301 永久重定向', target: true },
-  { v: '307', label: '307 重定向', target: true },
-  { v: '308', label: '308 重定向', target: true },
-  { v: 'header', label: 'header · 仅改 URL 不跳转', target: true },
-  { v: 'reject', label: 'reject · 断开连接', target: false },
-  { v: 'reject-200', label: 'reject-200 · 空响应体', target: false },
-  { v: 'reject-img', label: 'reject-img · 1px 图片', target: false },
-  { v: 'reject-dict', label: 'reject-dict · {}', target: false },
-  { v: 'reject-array', label: 'reject-array · []', target: false }
+/** 脚本 $argument 的传参方式 */
+const ARG_MODES = [
+  { v: 'none', label: '不传参（$argument 为 null）' },
+  { v: 'string', label: '字符串 · "a=1&b=2"' },
+  { v: 'raw', label: '原始字符串 · `{"a":1}`' },
+  { v: 'object', label: '插件对象 · {${a}, ${b}}' }
 ];
 
-/** 区块元信息 */
+/** 复写 Action 参数类型：S=字符串（自动加引号）N=数字 R=正则 A=任意值（原样） */
+const REWRITE_PHASES = [
+  { v: 'request', label: 'request · 请求发出前' },
+  { v: 'response', label: 'response · 响应返回后' }
+];
+
+/** 生成 request / response 两组同名 Action，避免手写 20 条重复定义 */
+function scopeActions(scope) {
+  return [
+    { v: `${scope}.header.add`, phase: scope, args: [{ n: 'Header 名', t: 'S', ph: 'X-Loon' }, { n: 'Header 值', t: 'S', ph: 'true' }] },
+    { v: `${scope}.header.set`, phase: scope, args: [{ n: 'Header 名', t: 'S', ph: 'Cache-Control' }, { n: 'Header 值', t: 'S', ph: 'no-cache' }] },
+    { v: `${scope}.header.del`, phase: scope, args: [{ n: 'Header 名', t: 'S', ph: 'Set-Cookie' }] },
+    { v: `${scope}.header.replace`, phase: scope, args: [{ n: 'Header 名', t: 'S', ph: 'Content-Type' }, { n: '正则', t: 'R', ph: '^(.+); charset=.+$' }, { n: '替换内容', t: 'S', ph: '$1' }] },
+    { v: `${scope}.body.replace`, phase: scope, args: [{ n: '正则', t: 'R', ph: '"vip":\\s*false' }, { n: '替换内容', t: 'S', ph: '"vip":true' }] },
+    { v: `${scope}.json.add`, phase: scope, args: [{ n: 'JSON 路径', t: 'S', ph: 'data.extra' }, { n: '值', t: 'A', ph: 'true' }] },
+    { v: `${scope}.json.delete`, phase: scope, args: [{ n: 'JSON 路径', t: 'S', ph: 'data.ads' }] },
+    { v: `${scope}.json.replace`, phase: scope, args: [{ n: 'JSON 路径', t: 'S', ph: 'data.vip' }, { n: '值', t: 'A', ph: 'true' }] },
+    { v: `${scope}.json.jq`, phase: scope, args: [{ n: 'jq 表达式', t: 'S', ph: '.data | del(.ads)' }] },
+    { v: `${scope}.json.jq_file`, phase: scope, args: [{ n: 'jq 文件路径', t: 'S', ph: 'filters/clean.jq' }] }
+  ];
+}
+
+/** 复写 Action 速查表（方法签名与官方文档一致，位置参数按顺序） */
+const REWRITE_ACTIONS = [
+  { v: 'url.replace', phase: 'request', args: [{ n: '替换内容', t: 'S', ph: 'https://new.example.com${m.1}' }] },
+  { v: 'redirect', phase: 'request', args: [{ n: '状态码', t: 'N', ph: '302' }, { n: '目标 URL', t: 'S', ph: 'https://api.example.com' }] },
+  { v: 'reject', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }, { n: '响应体', t: 'S', opt: true, ph: '可选，UTF-8 文本' }] },
+  { v: 'reject_img', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }] },
+  { v: 'reject_dict', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }] },
+  { v: 'reject_array', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }] },
+  { v: 'reject_video', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }] },
+  ...scopeActions('request'),
+  ...scopeActions('response'),
+  { v: 'request.body.mock', phase: 'request', args: [{ n: '类型', t: 'S', ph: 'json' }, { n: '内容', t: 'S', ph: '{"code":0}' }, { n: '是否继续请求', t: 'A', opt: true, ph: 'false' }] },
+  { v: 'request.body.mock_file', phase: 'request', args: [{ n: '类型', t: 'S', ph: 'json' }, { n: '文件路径', t: 'S', ph: 'mock/user.json' }, { n: '是否继续请求', t: 'A', opt: true, ph: 'false' }] },
+  { v: 'response.body.mock', phase: 'response', args: [{ n: '类型', t: 'S', ph: 'json' }, { n: '内容', t: 'S', ph: '{"code":0}' }, { n: '状态码', t: 'N', opt: true, ph: '200' }, { n: '是否继续请求', t: 'A', opt: true, ph: 'false' }] },
+  { v: 'response.body.mock_file', phase: 'response', args: [{ n: '类型', t: 'S', ph: 'json' }, { n: '文件路径', t: 'S', ph: 'mock/user.json' }, { n: '状态码', t: 'N', opt: true, ph: '200' }, { n: '是否继续请求', t: 'A', opt: true, ph: 'false' }] }
+];
+
+/** [General] 里插件可用的字段 */
+const GENERAL_FIELDS = [
+  { k: 'bypassTun', out: 'bypass-tun', label: 'bypass-tun · 绕开 TUN 的地址', ph: '192.168.0.0/16, 10.0.0.0/8' },
+  { k: 'skipProxy', out: 'skip-proxy', label: 'skip-proxy · 不经过代理的地址', ph: '192.168.1.1' },
+  { k: 'realIp', out: 'real-ip', label: 'real-ip · 真实出口 IP', ph: '1.2.3.4' },
+  { k: 'dnsServer', out: 'dns-server', label: 'dns-server · DNS 服务器', ph: '223.5.5.5, 119.29.29.29' }
+];
+
+/** 区块元信息（顺序 = 插件文件中的输出顺序，与官方文档一致） */
 const BLOCK_META = {
   details: { title: '详情', desc: '#!name / #!desc / #!icon 等元信息', badge: '信息' },
-  hostnames: { title: '主机名', desc: '[MITM] 需要解密的主机名', badge: 'MITM' },
-  rules: { title: '规则', desc: '[Rule] 分流 / 拦截策略', badge: '规则' },
-  rewrite: { title: '复写', desc: '[URL Rewrite] 重定向与改写', badge: '复写' },
-  script: { title: '脚本', desc: '[Script] 挂载 JS 脚本', badge: 'JS' }
+  argument: { title: '参数', desc: '[Argument] 让用户在 Loon 里填写', badge: 'ARG' },
+  general: { title: '通用', desc: '[General] 绕开 TUN / DNS 等设置', badge: 'GEN' },
+  rules: { title: '规则', desc: '[Rule] 分流 / 拦截策略', badge: 'RULE' },
+  rewrite: { title: '复写', desc: '[Rewrite] 条件 → Action', badge: 'RW' },
+  host: { title: 'Host', desc: '[Host] 域名到 IP / DNS 映射', badge: 'HOST' },
+  script: { title: '脚本', desc: '[Script] 挂载 JS 脚本', badge: 'JS' },
+  mitm: { title: 'MITM', desc: '[Mitm] 需要解密的主机名', badge: 'MITM' }
 };
+
+/** [Argument] 的控件类型 */
+const ARG_CONTROL_TYPES = [
+  { v: 'input', label: 'input · 文本输入' },
+  { v: 'select', label: 'select · 单选列表' },
+  { v: 'switch', label: 'switch · 开关' }
+];
 
 /** 区块默认数据 */
 const BLOCK_TEMPLATES = {
@@ -99,9 +163,17 @@ const BLOCK_TEMPLATES = {
       icon: 'https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png'
     }
   },
-  hostnames: {
-    type: 'hostnames',
-    data: { hosts: 'api.example.com\napi2.example.com' }
+  argument: {
+    type: 'argument',
+    data: {
+      items: [
+        { name: 'token', type: 'input', value: '默认令牌', options: '', tag: '令牌', desc: '用于脚本鉴权的令牌', num: false }
+      ]
+    }
+  },
+  general: {
+    type: 'general',
+    data: { bypassTun: '192.168.0.0/16, 10.0.0.0/8', skipProxy: '', realIp: '', dnsServer: '' }
   },
   rules: {
     type: 'rules',
@@ -120,22 +192,44 @@ const BLOCK_TEMPLATES = {
   rewrite: {
     type: 'rewrite',
     data: {
-      list: [{ from: '^https?:\\/\\/(www\\.)?example\\.cn\\/path', to: 'https://example.com/path', type: '302' }]
+      list: [
+        {
+          phase: 'request',
+          cond: '^https?:\\/\\/(www\\.)?example\\.cn\\/path',
+          capture: '',
+          actions: [{ v: 'url.replace', args: ['https://example.com/path'] }]
+        },
+        {
+          phase: 'response',
+          cond: '^https?:\\/\\/ads\\.example\\.com',
+          capture: '',
+          actions: [{ v: 'reject_dict', args: ['200'] }]
+        }
+      ]
+    }
+  },
+  host: {
+    type: 'host',
+    data: {
+      items: [{ name: 'example.com', value: 'server:223.5.5.5' }]
     }
   },
   script: {
     type: 'script',
     data: {
-      scriptType: 'http-response',
+      kind: 'response',
       match: '^https?:\\/\\/api\\.example\\.com\\/v1\\/user',
-      tag: 'DemoUser',
-      file: 'demo.js',
       path: 'https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js',
+      file: 'demo.js',
+      tag: 'DemoUser',
       timeout: '10',
-      requiresBody: 'true',
       enable: 'true',
+      requiresBody: 'true',
+      argMode: 'object',
+      argValue: 'token',
       code: [
         'const body = JSON.parse($response.body || "{}");',
+        'const { token } = $argument || {};',
         '',
         'if (!body || typeof body !== "object") {',
         '  $done({});',
@@ -143,10 +237,15 @@ const BLOCK_TEMPLATES = {
         '  body.data = body.data || {};',
         '  body.data.demo = true;',
         '  body.data.message = "Hello from Loon Plugin Studio";',
+        '  body.data.token = token || "";',
         '  $done({ status: 200, body: JSON.stringify(body) });',
         '}'
       ].join('\n')
     }
+  },
+  mitm: {
+    type: 'mitm',
+    data: { hosts: 'api.example.com\napi2.example.com' }
   }
 };
 
@@ -156,7 +255,6 @@ const state = {
   plugins: [],
   selectedId: null,
   tab: 'plugin',
-  rewriteSyntax: 'url-rewrite', // url-rewrite | rewrite
   dragId: null,
   /* 界面偏好：collapsed=预览面板折叠；sideCollapsed=侧栏折叠；w/h 分别记住宽屏与窄屏下的预览尺寸 */
   ui: { collapsed: false, sideCollapsed: false, w: 420, h: 320 },
@@ -261,7 +359,6 @@ const el = {
   codePreview: $('#codePreview'),
   issuesPanel: $('#issuesPanel'),
   issueCount: $('#issueCount'),
-  rewriteSyntax: $('#rewriteSyntax'),
   saveHint: $('#saveHint'),
   toast: $('#toast'),
   /* 面板折叠 */
@@ -270,7 +367,6 @@ const el = {
   sidebarToggle: $('#sidebarToggle'),
   sidebarExpand: $('#sidebarExpand'),
   preview: $('#preview'),
-  previewFoot: $('#previewFoot'),
   previewToggle: $('#previewToggle'),
   previewExpand: $('#previewExpand'),
   previewResizer: $('#previewResizer')
@@ -310,8 +406,7 @@ function scheduleSave() {
         STORE_KEY,
         JSON.stringify({
           plugins: state.plugins,
-          selectedId: state.selectedId,
-          rewriteSyntax: state.rewriteSyntax
+          selectedId: state.selectedId
         })
       );
       const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
@@ -335,7 +430,6 @@ function loadState() {
       if (Array.isArray(parsed.plugins) && parsed.plugins.length) {
         state.plugins = parsed.plugins.filter((p) => p && Array.isArray(p.blocks));
         state.selectedId = parsed.selectedId;
-        if (parsed.rewriteSyntax) state.rewriteSyntax = parsed.rewriteSyntax;
       }
     } catch (err) {
       console.warn('无法解析本地草稿，已回退到示例插件', err);
@@ -359,7 +453,8 @@ function createDemoPlugin() {
   return {
     id: uid(),
     name: 'Demo Plugin',
-    blocks: ['details', 'hostnames', 'rules', 'rewrite', 'script'].map((type) =>
+    /* 示例插件带上全部 8 个区块，作为新语法的活样例 */
+    blocks: ['details', 'argument', 'general', 'rules', 'rewrite', 'host', 'script', 'mitm'].map((type) =>
       Object.assign({ id: uid() }, clone(BLOCK_TEMPLATES[type]))
     )
   };
@@ -424,7 +519,8 @@ function removeConditionAt(root, path) {
 
 /**
  * 生成插件文本 + 脚本文件 + 语法问题清单。
- * 这里是整个项目最容易出错的地方，所有规则都按官方文档序列化。
+ * 这里是整个项目最容易出错的地方，所有规则都按官方文档序列化：
+ * 区块顺序 = #! 元信息 → [Argument] → [General] → [Rule] → [Rewrite] → [Host] → [Script] → [Mitm]
  */
 function buildOutput() {
   const plugin = currentPlugin();
@@ -434,6 +530,20 @@ function buildOutput() {
   const scripts = [];
 
   if (!plugin) return { text: '', scripts: [], issues: [] };
+
+  /* 先收集 [Argument] 声明的参数名，供复写 / 脚本里的 ${name} 引用校验 */
+  const argNames = new Set();
+  blocksOfType('argument').forEach((block) => {
+    (block.data.items || []).forEach((item) => {
+      const name = (item.name || '').trim();
+      if (!name) return;
+      if (argNames.has(name)) {
+        add('error', `参数 <code>${escapeHtml(name)}</code> 重名，Loon 加载时会拒绝整份插件。`, block.id);
+      } else {
+        argNames.add(name);
+      }
+    });
+  });
 
   /* ---------- 元信息 ---------- */
   const detailsBlocks = blocksOfType('details');
@@ -472,6 +582,34 @@ function buildOutput() {
 
   lines.push('');
 
+  /* ---------- [Argument] ---------- */
+  const argLines = [];
+  blocksOfType('argument').forEach((block) => {
+    (block.data.items || []).forEach((item) => {
+      const line = serializeArgument(item, add, block.id);
+      if (line) argLines.push(line);
+    });
+  });
+  if (argLines.length) {
+    lines.push('[Argument]');
+    argLines.forEach((line) => lines.push(line));
+    lines.push('');
+  }
+
+  /* ---------- [General] ---------- */
+  const generalLines = [];
+  blocksOfType('general').forEach((block) => {
+    GENERAL_FIELDS.forEach((f) => {
+      const value = String(block.data[f.k] || '').trim();
+      if (value) generalLines.push(`${f.out} = ${value}`);
+    });
+  });
+  if (generalLines.length) {
+    lines.push('[General]');
+    generalLines.forEach((line) => lines.push(line));
+    lines.push('');
+  }
+
   /* ---------- [Rule] ---------- */
   const ruleLines = [];
   blocksOfType('rules').forEach((block) => {
@@ -489,25 +627,47 @@ function buildOutput() {
     lines.push('');
   }
 
-  /* ---------- [URL Rewrite] / [Rewrite] ---------- */
-  const rewriteSection = state.rewriteSyntax === 'rewrite' ? '[Rewrite]' : '[URL Rewrite]';
+  /* ---------- [Rewrite]（Loon 3.5.1 (978) 新语法） ---------- */
   const rewriteLines = [];
   blocksOfType('rewrite').forEach((block) => {
     (block.data.list || []).forEach((item) => {
-      const line = serializeRewrite(item, add, block.id);
+      const line = serializeRewrite(item, argNames, add, block.id);
       if (line) rewriteLines.push(line);
     });
   });
   if (rewriteLines.length) {
-    lines.push(rewriteSection);
+    lines.push('[Rewrite]');
     rewriteLines.forEach((line) => lines.push(line));
     lines.push('');
   }
 
-  /* ---------- [Script] ---------- */
+  /* ---------- [Host] ---------- */
+  const hostLines = [];
+  blocksOfType('host').forEach((block) => {
+    (block.data.items || []).forEach((item) => {
+      const host = (item.name || '').trim();
+      const value = (item.value || '').trim();
+      if (!host || !value) {
+        add('error', 'Host 条目需要同时填写域名和映射值，该行不会生成。', block.id);
+        return;
+      }
+      if (/[\s,]/.test(host)) {
+        add('error', `Host 域名 <code>${escapeHtml(host)}</code> 不能包含空格或逗号，该行不会生成。`, block.id);
+        return;
+      }
+      hostLines.push(`${host} = ${value}`);
+    });
+  });
+  if (hostLines.length) {
+    lines.push('[Host]');
+    hostLines.forEach((line) => lines.push(line));
+    lines.push('');
+  }
+
+  /* ---------- [Script]（Loon 3.5.1 (983) 新语法） ---------- */
   const scriptLines = [];
   blocksOfType('script').forEach((block) => {
-    const line = serializeScript(block.data, add, block.id);
+    const line = serializeScript(block.data, argNames, add, block.id);
     if (line) scriptLines.push(line);
     const code = (block.data.code || '').trim();
     if (code) {
@@ -524,9 +684,9 @@ function buildOutput() {
     lines.push('');
   }
 
-  /* ---------- [MITM] ---------- */
+  /* ---------- [Mitm] ---------- */
   const hosts = [];
-  blocksOfType('hostnames').forEach((block) => {
+  blocksOfType('mitm').forEach((block) => {
     String(block.data.hosts || '')
       .split(/[\n,，;；\s]+/)
       .map((item) => item.trim())
@@ -544,19 +704,19 @@ function buildOutput() {
       });
   });
   if (hosts.length) {
-    lines.push('[MITM]');
+    lines.push('[Mitm]');
     lines.push(`hostname = ${hosts.join(', ')}`);
     lines.push('');
   }
 
   const needMitm =
-    blocksOfType('script').some((b) => /^http-(request|response)$/.test(b.data.scriptType || '')) ||
+    blocksOfType('script').some((b) => /^(request|response)$/.test(b.data.kind || '')) ||
     rewriteLines.length > 0;
   if (needMitm && !hosts.length) {
-    add('warn', '脚本要改写 HTTPS 内容 / 复写要生效，必须配置 <code>[MITM]</code> 主机名，否则不会被执行。');
+    add('warn', '脚本要改写 HTTPS 内容 / 复写要生效，必须配置 <code>[Mitm]</code> 主机名，否则不会被执行。');
   }
   if (hosts.length && !needMitm) {
-    add('warn', '配置了 <code>[MITM]</code> 主机名，但插件没有需要解密的脚本或复写，通常可以去掉。');
+    add('warn', '配置了 <code>[Mitm]</code> 主机名，但插件没有需要解密的脚本或复写，通常可以去掉。');
   }
 
   if (!plugin.blocks.length) add('warn', '还没有任何区块，点右上角「添加区块」开始组装插件。');
@@ -604,64 +764,317 @@ function serializeCondition(cond, withPolicy, add, blockId) {
   return `${type},${value}${withPolicy ? `,${policy}` : ''}`;
 }
 
-/** 序列化复写条目：[URL Rewrite] 为 pattern target type，[Rewrite] 为 pattern type target */
-function serializeRewrite(item, add, blockId) {
-  const pattern = (item.from || '').trim();
-  const target = (item.to || '').trim();
-  const type = (item.type || '302').trim();
-  const meta = REWRITE_TYPES.find((t) => t.v === type) || { v: type, target: true };
+/* ---------- 序列化工具 ---------- */
 
-  if (!pattern) {
-    add('error', '复写缺少匹配正则，该行不会生成。', blockId);
-    return null;
-  }
-  if (meta.target && !target) {
-    add('error', `复写类型 <code>${escapeHtml(type)}</code> 需要目标地址。`, blockId);
-    return null;
-  }
-
-  const parts = meta.target
-    ? state.rewriteSyntax === 'rewrite'
-      ? [pattern, type, target]
-      : [pattern, target, type]
-    : [pattern, type];
-  return parts.join(' ');
+/** Loon 双引号字符串转义（官方转义表：\" \\ \n \r \t）。
+ *  注意：${name} 是模板变量（如捕获引用 ${item.1}），这里刻意不转义——
+ *  要输出字面量 ${ 时用户可自己写 \$ 。 */
+function quoteLoonString(value) {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t');
 }
 
-/** 序列化脚本条目 */
-function serializeScript(data, add, blockId) {
-  const type = (data.scriptType || 'http-response').trim();
-  const meta = SCRIPT_TYPES.find((s) => s.v === type) || { v: type, match: '', body: false };
-  const path = (data.path || '').trim();
-  const match = (data.match || '').trim();
-  const params = [];
+/** 把用户输入的正则规范成 /pattern/flags；extraFlags 会并入（如脚本沿用的 i） */
+function wrapRegex(pattern, extraFlags = '') {
+  let p = String(pattern).trim();
+  let flags = '';
+  if (p.startsWith('/')) {
+    const last = p.lastIndexOf('/');
+    if (last <= 0) return null;
+    flags = p.slice(last + 1);
+    p = p.slice(1, last);
+  }
+  if (!p) return null;
+  /* 未转义的 / 自动补转义（URL 正则里极其常见），已转义的不动 */
+  p = p
+    .replace(/\\[\s\S]/g, (m) => `\u0000${m}`)
+    .replace(/\//g, '\\/')
+    .replace(/\u0000/g, '');
+  try {
+    new RegExp(p);
+  } catch (err) {
+    return null;
+  }
+  const all = new Set((flags + extraFlags).split('').filter((f) => 'ims'.includes(f)));
+  return `/${p}/${[...all].join('')}`;
+}
 
-  if (!path) {
-    add('error', '脚本缺少 <code>script-path</code>，Loon 无法加载脚本，该行不会生成。', blockId);
+const PLUGIN_REF_RE = /\$\{([A-Za-z_]\w*)/g;
+
+/** 扫描 ${name} 引用；返回 true 表示发现未声明的参数（错误已记录） */
+function checkPluginRefs(text, argNames, captureName, add, blockId, what) {
+  const known = new Set(['url', 'request', 'response', ...argNames]);
+  if (captureName) known.add(captureName);
+  const unknown = new Set();
+  let m;
+  PLUGIN_REF_RE.lastIndex = 0;
+  while ((m = PLUGIN_REF_RE.exec(text))) {
+    if (!known.has(m[1])) unknown.add(m[1]);
+  }
+  if (!unknown.size) return false;
+  unknown.forEach((ident) => {
+    add('error', `${what}引用了未声明的参数 <code>\${${ident}}</code>，请在「参数」区块声明或修正拼写。`, blockId);
+  });
+  return true;
+}
+
+/* ---------- [Argument] ---------- */
+
+/** 序列化单个参数：参数名 = 控件类型,值...,type=number,tag=标题,desc=说明 */
+function serializeArgument(item, add, blockId) {
+  const argName = (item.name || '').trim();
+  if (!argName) {
+    add('error', '参数缺少参数名，该行不会生成。', blockId);
     return null;
   }
-  if (meta.match && !match) {
-    add('error', `${type} 脚本缺少${type === 'cron' ? ' Cron 表达式' : '匹配 URL 正则'}，该行不会生成。`, blockId);
+  if (!/^[A-Za-z_]\w*$/.test(argName)) {
+    add('error', `参数名 <code>${escapeHtml(argName)}</code> 只能由字母 / 数字 / 下划线组成且不以数字开头，该行不会生成。`, blockId);
     return null;
   }
-  if (type === 'cron') {
-    const fields = match.replace(/^["']|["']$/g, '').trim().split(/\s+/);
-    if (fields.length < 5 || fields.length > 6) {
-      add('warn', `Cron 表达式 <code>${escapeHtml(match)}</code> 应为 5 段（分 时 日 月 周）或 6 段（秒 分 时 日 月 周）。`, blockId);
+  const type = ARG_CONTROL_TYPES.some((t) => t.v === item.type) ? item.type : 'input';
+  const parts = [type];
+
+  if (type === 'switch') {
+    parts.push(item.value === 'false' ? 'false' : 'true');
+  } else if (type === 'select') {
+    const opts = String(item.options || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!opts.length) {
+      add('error', `参数 <code>${escapeHtml(argName)}</code> 是 select 类型，至少要填一个可选值。`, blockId);
+      return null;
+    }
+    opts.forEach((opt) => {
+      parts.push(item.num && /^-?\d+(\.\d+)?$/.test(opt) ? opt : `"${quoteLoonString(opt)}"`);
+    });
+  } else {
+    const value = (item.value || '').trim();
+    if (value) {
+      if (item.num && !/^-?\d+(\.\d+)?$/.test(value)) {
+        add('warn', `参数 <code>${escapeHtml(argName)}</code> 勾选了「数字」但默认值不是数字，Loon 会按 String 解析。`, blockId);
+      }
+      parts.push(item.num && /^-?\d+(\.\d+)?$/.test(value) ? value : `"${quoteLoonString(value)}"`);
     }
   }
-  if (!/^https?:\/\//i.test(path) && !/\.js$/i.test(path)) {
-    add('warn', `本地脚本 <code>${escapeHtml(path)}</code> 需要放在 Loon 的脚本目录下，否则无法加载。`, blockId);
+
+  if (item.num && type !== 'switch') parts.push('type=number');
+  const label = (item.tag || '').trim();
+  if (/[,=]/.test(label)) add('warn', `参数 <code>${escapeHtml(argName)}</code> 的标题里不要用逗号或等号，会被当成属性分隔。`, blockId);
+  if (label) parts.push(`tag=${label}`);
+  const desc = (item.desc || '').trim();
+  if (desc) parts.push(`desc=${desc}`);
+
+  return `${argName} = ${parts.join(', ')}`;
+}
+
+/* ---------- [Rewrite]（978 新语法） ---------- */
+
+/** 序列化一条复写：<phase> if <cond>[ as <name>] then <action>(...) | <action>(...) */
+function serializeRewrite(item, argNames, add, blockId) {
+  const phase = item.phase === 'response' ? 'response' : 'request';
+  const pattern = (item.cond || '').trim();
+  if (!pattern) {
+    add('error', '复写缺少 URL 匹配正则，该行不会生成。', blockId);
+    return null;
+  }
+  const regex = wrapRegex(pattern);
+  if (!regex) {
+    add('error', `复写正则 <code>${escapeHtml(pattern)}</code> 无法编译，请检查语法。`, blockId);
+    return null;
   }
 
-  params.push(`script-path=${path}`);
-  if (meta.body && data.requiresBody === 'true') params.push('requires-body=true');
-  if (String(data.timeout || '').trim()) params.push(`timeout=${String(data.timeout).trim()}`);
-  if ((data.tag || '').trim()) params.push(`tag=${data.tag.trim()}`);
-  if (data.enable === 'false') params.push('enable=false');
+  const capture = (item.capture || '').trim();
+  if (capture) {
+    if (!/^[A-Za-z_]\w*$/.test(capture)) {
+      add('error', `捕获名 <code>${escapeHtml(capture)}</code> 只能由字母 / 数字 / 下划线组成且不以数字开头。`, blockId);
+      return null;
+    }
+    if (argNames.has(capture)) {
+      add('error', `捕获名 <code>${escapeHtml(capture)}</code> 与插件参数重名，Loon 加载时会拒绝。`, blockId);
+      return null;
+    }
+  }
 
-  const head = meta.match ? `${type} ${type === 'cron' ? `"${match.replace(/^["']|["']$/g, '')}"` : match}` : type;
-  return `${head} ${params.join(', ')}`;
+  const list = item.actions || [];
+  if (!list.length) {
+    add('error', '复写没有任何 Action，该行不会生成。', blockId);
+    return null;
+  }
+  const actions = [];
+  list.forEach((action, index) => {
+    const text = serializeRewriteAction(action, phase, index, add, blockId);
+    if (text) actions.push(text);
+  });
+  if (actions.length !== list.length) return null;
+
+  /* 官方限制：一条复写最多一个 response.body.mock(_file)，且除它之外只能组合 response.header.* */
+  const mocks = list.filter((a) => /^response\.body\.mock(_file)?$/.test(a.v || ''));
+  if (mocks.length > 1) {
+    add('error', '一条复写只能包含一个 <code>response.body.mock(_file)</code>，该行不会生成。', blockId);
+    return null;
+  }
+  if (mocks.length === 1) {
+    const bad = list.find((a) => !/^response\.body\.mock(_file)?$/.test(a.v || '') && !/^response\.header\./.test(a.v || ''));
+    if (bad) {
+      add('error', `包含响应 Mock 的复写只能搭配 <code>response.header.*</code> Action（当前还含 <code>${escapeHtml(bad.v)}</code>），该行不会生成。`, blockId);
+      return null;
+    }
+  }
+
+  const head = `${phase} if \${url} ~= ${regex}${capture ? ` as ${capture}` : ''} then `;
+  const body = actions.join(' | ');
+  /* 条件由本工具固定生成（不会引用参数），只需要校验 Action 里的 ${name} */
+  if (checkPluginRefs(body, argNames, capture, add, blockId, '这条复写')) return null;
+  return head + body;
+}
+
+/** 序列化单个 Action：按 REWRITE_ACTIONS 的参数表做类型化输出 */
+function serializeRewriteAction(action, phase, index, add, blockId) {
+  const meta = REWRITE_ACTIONS.find((a) => a.v === action.v);
+  if (!meta) {
+    add('error', `复写第 ${index + 1} 个 Action 无效，该行不会生成。`, blockId);
+    return null;
+  }
+  if (meta.phase !== 'both' && meta.phase !== phase) {
+    add('error', `<code>${meta.v}</code> 只能用于 ${meta.phase} 阶段，当前复写是 ${phase}，该行不会生成。`, blockId);
+    return null;
+  }
+
+  const values = [];
+  for (let i = 0; i < meta.args.length; i += 1) {
+    const spec = meta.args[i];
+    const raw = String((action.args || [])[i] || '').trim();
+    if (!raw) {
+      if (spec.opt) break;
+      add('error', `<code>${meta.v}</code> 缺少参数「${spec.n}」，该行不会生成。`, blockId);
+      return null;
+    }
+    if (spec.t === 'N') {
+      if (!/^\d+$/.test(raw)) {
+        add('error', `<code>${meta.v}</code> 的「${spec.n}」应为数字，当前是 <code>${escapeHtml(raw)}</code>。`, blockId);
+        return null;
+      }
+      if (meta.v === 'redirect' && raw !== '302' && raw !== '307') {
+        add('error', `<code>redirect</code> 当前只支持 302 / 307 状态码，该行不会生成。`, blockId);
+        return null;
+      }
+      if (/^reject/.test(meta.v) && (Number(raw) < 100 || Number(raw) > 599)) {
+        add('error', `<code>${meta.v}</code> 的状态码必须在 100–599 之间，该行不会生成。`, blockId);
+        return null;
+      }
+      values.push(raw);
+    } else if (spec.t === 'R') {
+      const regex = wrapRegex(raw);
+      if (!regex) {
+        add('error', `<code>${meta.v}</code> 的「${spec.n}」不是合法正则，该行不会生成。`, blockId);
+        return null;
+      }
+      values.push(regex);
+    } else if (spec.t === 'S') {
+      values.push(`"${quoteLoonString(raw)}"`);
+    } else {
+      values.push(raw);
+    }
+  }
+
+  return `${meta.v}(${values.join(', ')})`;
+}
+
+/* ---------- [Script]（983 新语法） ---------- */
+
+/** 序列化脚本：<kind> [if <cond>] then script("path"[, <argument>]) [with <options>] */
+function serializeScript(data, argNames, add, blockId) {
+  const meta = SCRIPT_KINDS.find((s) => s.v === data.kind) || SCRIPT_KINDS[1];
+  const kind = meta.v;
+  const path = (data.path || '').trim();
+  if (!path) {
+    add('error', '脚本缺少路径，Loon 无法加载脚本，该行不会生成。', blockId);
+    return null;
+  }
+
+  const match = (data.match || '').trim();
+  let head = kind;
+  if (meta.cond === true) {
+    if (!match) {
+      add('error', `<code>${kind}</code> 脚本缺少 URL 匹配正则（response 脚本必需的 URL Guard），该行不会生成。`, blockId);
+      return null;
+    }
+    const regex = wrapRegex(match, 'i');
+    if (!regex) {
+      add('error', `脚本的 URL 正则 <code>${escapeHtml(match)}</code> 无法编译，请检查语法。`, blockId);
+      return null;
+    }
+    head = `${kind} if \${url} ~= ${regex}`;
+  } else if (meta.cond === 'cron') {
+    if (!match) {
+      add('error', 'cron 脚本缺少 Cron 表达式，该行不会生成。', blockId);
+      return null;
+    }
+    const dynamic = /^\$\{([A-Za-z_]\w*)\}$/.test(match);
+    if (dynamic) {
+      const ref = match.slice(2, -1);
+      if (!argNames.has(ref)) {
+        add('error', `动态 Cron 引用了未声明的参数 <code>\${${ref}}</code>，该行不会生成。`, blockId);
+        return null;
+      }
+      head = `cron \${${ref}}`;
+    } else {
+      const fields = match.split(/\s+/);
+      if (fields.length < 5 || fields.length > 6) {
+        add('warn', `Cron 表达式 <code>${escapeHtml(match)}</code> 应为 5 段（分 时 日 月 周）或 6 段（秒 分 时 日 月 周）。`, blockId);
+      }
+      head = `cron "${match.replace(/"/g, '')}"`;
+    }
+  }
+
+  /* script(...) 第二个参数决定 $argument 类型：省略 / 字符串 / 原始字符串 / 插件对象 */
+  const argMode = ARG_MODES.some((m) => m.v === data.argMode) ? data.argMode : 'none';
+  let argPart = '';
+  if (argMode === 'string' || argMode === 'raw') {
+    const value = String(data.argValue || '').trim();
+    if (value) {
+      argPart = argMode === 'raw'
+        ? `, \`${value.replace(/`/g, '``')}\``
+        : `, "${quoteLoonString(value)}"`;
+    }
+  } else if (argMode === 'object') {
+    const names = String(data.argValue || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!names.length) {
+      add('error', '对象传参不能为空：至少填一个已在「参数」区块声明的参数名，该行不会生成。', blockId);
+      return null;
+    }
+    const unknown = names.find((n) => !argNames.has(n));
+    if (unknown) {
+      add('error', `对象传参引用了未声明的参数 <code>${escapeHtml(unknown)}</code>，请在「参数」区块声明，该行不会生成。`, blockId);
+      return null;
+    }
+    if (new Set(names).size !== names.length) {
+      add('error', '对象传参里同一个参数被引用了多次，该行不会生成。', blockId);
+      return null;
+    }
+    argPart = `, {${names.map((n) => `\${${n}}`).join(', ')}}`;
+  }
+
+  /* with 属性（官方字段：enable / tag / img_url / timeout / debug / requires_body / binary_body_mode） */
+  const opts = [];
+  const label = (data.tag || '').trim();
+  if (label) opts.push(`tag="${quoteLoonString(label)}"`);
+  const timeout = String(data.timeout || '').trim();
+  if (timeout) {
+    if (/^\d+$/.test(timeout) && Number(timeout) > 0) opts.push(`timeout=${timeout}`);
+    else add('warn', `脚本的 timeout 应为正整数，当前是 <code>${escapeHtml(timeout)}</code>，已跳过。`, blockId);
+  }
+  if (meta.body) {
+    if (data.requiresBody === 'true') opts.push('requires_body=true');
+    if (data.binaryMode === 'true') opts.push('binary_body_mode=true');
+  }
+  if (data.enable === 'false') opts.push('enable=false');
+
+  const line = `${head} then script("${quoteLoonString(path)}"${argPart})${opts.length ? ` with ${opts.join(', ')}` : ''}`;
+  if (checkPluginRefs(line, argNames, null, add, blockId, '这条脚本')) return null;
+  return line;
 }
 
 /* ========================= 语法高亮 ========================= */
@@ -679,17 +1092,14 @@ function highlightPlugin(text) {
       if (!line) return '';
       if (/^#!/.test(line)) return span('tk-meta', escapeHtml(line));
       if (/^\[[^\]]+\]$/.test(line)) return span('tk-section', escapeHtml(line));
-      if (/^hostname\s*=/.test(line)) {
-        const idx = line.indexOf('=');
-        return (
-          span('tk-key', escapeHtml(line.slice(0, idx).trim())) +
-          span('tk-dim', ' = ') +
-          span('tk-str', escapeHtml(line.slice(idx + 1).trim()))
-        );
-      }
-      if (/^(http-request|http-response|cron|network-changed|generic|dns)\b/.test(line)) return hlScriptLine(line);
+      if (/^hostname\s*=/.test(line)) return hlHostLine(line);
+      /* 983 脚本行都带 then script(；978 复写行是 phase if ... then action(...) */
+      if (/\bthen\s+script\(/.test(line)) return hlScriptLine(line);
+      if (/^(request|response)\s+if\s/.test(line)) return hlRewriteLine(line);
       if (/^(AND|OR|NOT),/.test(line)) return hlRuleLine(line);
-      if (REWRITE_TYPES.some((t) => line.split(/\s+/).pop() === t.v)) return hlRewriteLine(line);
+      if (/^(bypass-tun|skip-proxy|real-ip|dns-server)\s*=/i.test(line)) return hlHostLine(line);
+      if (/^[A-Za-z_]\w*\s*=\s*(input|select|switch)\b/.test(line)) return hlHostLine(line);
+      if (/^[\w.*-]+\s*=\s*\S+$/.test(line)) return hlHostLine(line);
       if (/^(DOMAIN|IP-|GEOIP|USER-AGENT|URL-REGEX|PROTOCOL|DEST-PORT|SRC-PORT)/.test(line)) return hlRuleLine(line);
       return escapeHtml(line);
     })
@@ -709,33 +1119,62 @@ function hlRuleLine(line) {
   return `${head}${span('tk-dim', ',')}${tail}`;
 }
 
-function hlRewriteLine(line) {
-  const parts = line.split(/\s+/);
-  const type = parts.pop();
-  return `${escapeHtml(parts.join(' '))} ${span('tk-type', type)}`;
+/** key = value 行（Host / General / hostname 等） */
+function hlHostLine(line) {
+  const idx = line.indexOf('=');
+  if (idx < 0) return escapeHtml(line);
+  return (
+    span('tk-key', escapeHtml(line.slice(0, idx).trim())) +
+    span('tk-dim', ' = ') +
+    span('tk-str', escapeHtml(line.slice(idx + 1).trim()))
+  );
 }
 
-function hlScriptLine(line) {
-  const sp = line.indexOf(' script-path=');
-  let type = line;
-  let match = '';
-  let params = '';
-  if (sp >= 0) {
-    const head = line.slice(0, sp);
-    const hi = head.indexOf(' ');
-    type = hi >= 0 ? head.slice(0, hi) : head;
-    match = hi >= 0 ? head.slice(hi + 1) : '';
-    params = line.slice(sp + 1);
-  } else {
-    const hi = line.indexOf(' ');
-    type = hi >= 0 ? line.slice(0, hi) : line;
-    params = hi >= 0 ? line.slice(hi + 1) : '';
-  }
-  const paramsHtml = escapeHtml(params).replace(
-    /([a-z-]+)=([^,]*)/g,
+/** 高亮 Action 调用串：方法名 + 双引号字符串（先上色字符串，再识别方法名） */
+function hlActionList(text) {
+  return escapeHtml(text)
+    .replace(/&quot;(?:[^&]|&(?!quot;))*&quot;/g, (m) => span('tk-str', m))
+    .replace(/(^|[|\s(])(script|[a-z_]+(?:\.[a-z_]+)+)\(/g, (m, pre, name) => `${pre}${span('tk-key', name)}(`);
+}
+
+/** with 属性区：k=v 形式 */
+function hlOptions(text) {
+  return escapeHtml(text).replace(
+    /([a-z_]+)=([^,]*)/g,
     (_, key, value) => `${span('tk-key', key)}${span('tk-dim', '=')}${span('tk-str', value)}`
   );
-  return `${span('tk-type', escapeHtml(type))} ${span('tk-str', escapeHtml(match))} ${paramsHtml}`.trim();
+}
+
+/** 978 复写行：<phase> if <cond>[ as <name>] then <actions> */
+function hlRewriteLine(line) {
+  const ti = line.indexOf(' then ');
+  if (ti < 0) return escapeHtml(line);
+  const head = line.slice(0, ti);
+  const actions = line.slice(ti + 6);
+  const m = head.match(/^(request|response)\s+if\s+([\s\S]+?)(?:\s+as\s+([A-Za-z_]\w*))?$/);
+  let html = span('tk-type', escapeHtml(m ? m[1] : head));
+  if (m) {
+    html += span('tk-dim', ' if ') + span('tk-str', escapeHtml(m[2]));
+    if (m[3]) html += span('tk-dim', ' as ') + span('tk-key', escapeHtml(m[3]));
+  }
+  return html + span('tk-dim', ' then ') + hlActionList(actions);
+}
+
+/** 983 脚本行：<kind> [if <cond>] then script(...)[ with <options>] */
+function hlScriptLine(line) {
+  const wi = line.indexOf(' with ');
+  const main = wi >= 0 ? line.slice(0, wi) : line;
+  const opts = wi >= 0 ? line.slice(wi + 6) : '';
+  const ti = main.indexOf(' then ');
+  if (ti < 0) return escapeHtml(line);
+  const head = main.slice(0, ti);
+  const call = main.slice(ti + 6);
+  const m = head.match(/^(request|response|cron|network-changed|generic)(?:\s+if\s+([\s\S]+))?$/);
+  let html = span('tk-type', escapeHtml(m ? m[1] : head));
+  if (m && m[2]) html += span('tk-dim', ' if ') + span('tk-str', escapeHtml(m[2]));
+  html = html + span('tk-dim', ' then ') + hlActionList(call);
+  if (opts) html += span('tk-dim', ' with ') + hlOptions(opts);
+  return html;
 }
 
 const JS_KEYWORDS = /\b(const|let|var|function|if|else|return|new|typeof|for|while|true|false|null|undefined)\b/g;
@@ -835,10 +1274,13 @@ function renderBlock(block, index) {
 
 function renderBlockBody(block) {
   if (block.type === 'details') return renderDetails(block);
-  if (block.type === 'hostnames') return renderHostnames(block);
+  if (block.type === 'argument') return renderArgument(block);
+  if (block.type === 'general') return renderGeneral(block);
   if (block.type === 'rules') return renderRules(block);
   if (block.type === 'rewrite') return renderRewrite(block);
+  if (block.type === 'host') return renderHost(block);
   if (block.type === 'script') return renderScript(block);
+  if (block.type === 'mitm') return renderMitm(block);
   return '';
 }
 
@@ -875,10 +1317,98 @@ function renderDetails(block) {
     </div>`;
 }
 
-function renderHostnames(block) {
+/** [Argument]：name = input,值,tag=标题,desc=说明 / select / switch */
+function renderArgument(block) {
+  const items = block.data.items || [];
+  return `
+    <div class="rows">
+      ${items
+        .map(
+          (item, idx) => `
+        <div class="row is-argument" data-idx="${idx}">
+          <div class="field">
+            <label>参数名</label>
+            <input type="text" data-field="name" value="${escapeHtml(item.name || '')}" placeholder="token" />
+          </div>
+          <div class="field">
+            <label>控件类型</label>
+            <select data-field="type">${optionsHtml(ARG_CONTROL_TYPES, item.type || 'input')}</select>
+          </div>
+          <div class="field">
+            <label>${item.type === 'select' ? '可选值（第一个为默认）' : '默认值'}</label>
+            ${
+              item.type === 'switch'
+                ? `<select data-field="value">${optionsHtml([{ v: 'true', label: 'true' }, { v: 'false', label: 'false' }], item.value === 'false' ? 'false' : 'true')}</select>`
+                : `<input type="text" data-field="${item.type === 'select' ? 'options' : 'value'}" value="${escapeHtml(item.type === 'select' ? item.options || '' : item.value || '')}" placeholder="${item.type === 'select' ? 'CN, US, JP' : '默认内容，可留空'}" />`
+            }
+          </div>
+          <div class="field">
+            <label>标题 · tag</label>
+            <input type="text" data-field="tag" value="${escapeHtml(item.tag || '')}" placeholder="参数标题" />
+          </div>
+          <div class="row-actions">
+            ${item.type !== 'switch' ? `<label class="check" title="加 type=number，条件里按数字比较"><input type="checkbox" data-field="num" ${item.num ? 'checked' : ''} />数字</label>` : ''}
+            <button class="btn-icon is-danger" type="button" data-act="del-arg" data-idx="${idx}" title="删除参数" aria-label="删除参数">${ICONS.trash}</button>
+          </div>
+          <div class="field span-all">
+            <label>说明 · desc（可选）</label>
+            <input type="text" data-field="desc" value="${escapeHtml(item.desc || '')}" placeholder="显示给用户看的参数说明" />
+          </div>
+        </div>`
+        )
+        .join('')}
+    </div>
+    <button class="btn btn-sm add-row" type="button" data-act="add-arg" data-id="${block.id}">＋ 添加参数</button>
+    <div class="note-box">参数会在 Loon 里生成设置界面；在复写 / 脚本的条件或 <code>with</code> 属性里用 <code>\${name}</code> 引用。select 的第一个值为默认值；勾选「数字」会输出 <code>type=number</code>。</div>`;
+}
+
+/** [General]：只有 bypass-tun / skip-proxy / real-ip / dns-server 四个字段 */
+function renderGeneral(block) {
+  return `
+    <div class="grid">
+      ${GENERAL_FIELDS.map(
+        (f) => `
+      <div class="field span-all">
+        <label>${escapeHtml(f.label)}</label>
+        <input type="text" data-field="${f.k}" value="${escapeHtml(block.data[f.k] || '')}" placeholder="${escapeHtml(f.ph)}" />
+      </div>`
+      ).join('')}
+    </div>
+    <div class="note-box">留空的字段不会输出；插件里 <code>[General]</code> 只支持这四个字段。</div>`;
+}
+
+/** [Host]：域名 = IP / 别名 / server:DNS / ip-mode:... */
+function renderHost(block) {
+  const items = block.data.items || [];
+  return `
+    <div class="rows">
+      ${items
+        .map(
+          (item, idx) => `
+        <div class="row is-host" data-idx="${idx}">
+          <div class="field">
+            <label>域名</label>
+            <input type="text" data-field="name" value="${escapeHtml(item.name || '')}" placeholder="example.com 或 *.example.com" />
+          </div>
+          <div class="field grow">
+            <label>映射值</label>
+            <input type="text" data-field="value" value="${escapeHtml(item.value || '')}" placeholder="192.168.1.20 / server:8.8.4.4" />
+          </div>
+          <div class="row-actions">
+            <button class="btn-icon is-danger" type="button" data-act="del-host" data-idx="${idx}" title="删除映射" aria-label="删除映射">${ICONS.trash}</button>
+          </div>
+        </div>`
+        )
+        .join('')}
+    </div>
+    <button class="btn btn-sm add-row" type="button" data-act="add-host" data-id="${block.id}">＋ 添加映射</button>
+    <div class="note-box">值支持固定 IP、别名域名、<code>server:8.8.4.4</code>（指定 DNS）、<code>server:system</code>、<code>ip-mode:ipv4-only</code>，以及 <code>ssid:名称</code> 作为域名。</div>`;
+}
+
+function renderMitm(block) {
   return `
     <div class="field">
-      <label>MITM 主机名 · hostname =</label>
+      <label>解密主机名 · hostname =</label>
       <textarea data-field="hosts" rows="4" placeholder="api.example.com&#10;*.example.com">${escapeHtml(block.data.hosts || '')}</textarea>
       <span class="hint">每行一个或用英文逗号分隔，导出时会自动合并为单行逗号分隔（Loon 要求）。支持 <code>*.example.com</code> 通配。</span>
     </div>`;
@@ -950,72 +1480,125 @@ function renderRuleRows(conditions, blockId, parentPath) {
     .join('');
 }
 
+/** [Rewrite]（978 新语法）：一条复写 = 阶段 + URL 正则 + 可选捕获名 + 多个 Action */
 function renderRewrite(block) {
   const list = block.data.list || [];
   return `
     <div class="rows">
       ${list
-        .map(
-          (item, idx) => `
-        <div class="row is-rewrite" data-idx="${idx}">
-          <div class="field">
-            <label>匹配正则</label>
-            <input type="text" data-field="from" value="${escapeHtml(item.from || '')}" placeholder="^https?:\\/\\/example\\.com" />
+        .map((item, idx) => {
+          const phase = item.phase === 'response' ? 'response' : 'request';
+          const compatible = REWRITE_ACTIONS.filter((a) => a.phase === 'both' || a.phase === phase);
+          const actions = item.actions || [];
+          return `
+        <div class="rewrite-item" data-idx="${idx}">
+          <div class="row is-rewrite">
+            <div class="field">
+              <label>阶段</label>
+              <select data-field="phase">${optionsHtml(REWRITE_PHASES, phase)}</select>
+            </div>
+            <div class="field grow">
+              <label>URL 匹配正则</label>
+              <input type="text" data-field="cond" value="${escapeHtml(item.cond || '')}" placeholder="^https?:\\/\\/api\\.example\\.com" />
+            </div>
+            <div class="field">
+              <label>捕获名 as（可选）</label>
+              <input type="text" data-field="capture" value="${escapeHtml(item.capture || '')}" placeholder="item" />
+            </div>
+            <div class="row-actions">
+              <button class="btn-icon is-danger" type="button" data-act="del-rewrite" data-idx="${idx}" title="删除复写" aria-label="删除复写">${ICONS.trash}</button>
+            </div>
           </div>
-          <div class="field">
-            <label>目标地址</label>
-            <input type="text" data-field="to" value="${escapeHtml(item.to || '')}" placeholder="https://example.com" />
+          <div class="action-list">
+            ${actions
+              .map((action, aidx) => {
+                const meta = REWRITE_ACTIONS.find((a) => a.v === action.v);
+                const opts = compatible.some((a) => a.v === action.v)
+                  ? compatible
+                  : [{ v: action.v, label: `${action.v} · 阶段不符` }, ...compatible];
+                return `
+              <div class="row is-action" data-aidx="${aidx}">
+                <div class="field">
+                  <label>Action</label>
+                  <select data-field="action-v">${optionsHtml(opts, action.v)}</select>
+                </div>
+                ${((meta && meta.args) || [])
+                  .map(
+                    (arg, gidx) => `
+                <div class="field">
+                  <label>${escapeHtml(arg.n)}${arg.opt ? '（可选）' : ''}</label>
+                  <input type="text" data-field="action-arg" data-argidx="${gidx}" value="${escapeHtml((action.args || [])[gidx] || '')}" placeholder="${escapeHtml(arg.ph || '')}" />
+                </div>`
+                  )
+                  .join('')}
+                <div class="row-actions">
+                  <button class="btn-icon is-danger" type="button" data-act="del-action" data-idx="${idx}" data-aidx="${aidx}" title="删除 Action" aria-label="删除 Action">${ICONS.trash}</button>
+                </div>
+              </div>`;
+              })
+              .join('')}
+            <button class="btn btn-sm add-row" type="button" data-act="add-action" data-idx="${idx}">＋ 添加 Action</button>
           </div>
-          <div class="field">
-            <label>类型</label>
-            <select data-field="type">${optionsHtml(REWRITE_TYPES, item.type || '302')}</select>
-          </div>
-          <div class="row-actions">
-            <button class="btn-icon is-danger" type="button" data-act="del-rewrite" data-idx="${idx}" title="删除复写" aria-label="删除复写">${ICONS.trash}</button>
-          </div>
-        </div>`
-        )
+        </div>`;
+        })
         .join('')}
     </div>
     <button class="btn btn-sm add-row" type="button" data-act="add-rewrite" data-id="${block.id}">＋ 添加复写</button>
-    <div class="note-box">类型填 <code>302/301/307/308/header</code> 时必须填目标地址；选 <code>reject*</code> 时目标地址会被忽略。</div>`;
+    <div class="note-box">输出形如 <code>request if \${url} ~= /正则/ as item then Action(参数) | Action(参数)</code>。字符串参数自动加引号，正则参数包进 /…/；<code>url.replace</code> / <code>redirect</code> 替换 URL 正则命中的部分，可用 <code>\${捕获名.1}</code> 引用捕获。含响应 Mock 的复写只能搭配 <code>response.header.*</code>。</div>`;
 }
 
+/** [Script]（983 新语法）：kind [if 条件] then script(path[, argument]) [with ...] */
 function renderScript(block) {
   const d = block.data;
-  const meta = SCRIPT_TYPES.find((s) => s.v === (d.scriptType || 'http-response')) || SCRIPT_TYPES[0];
+  const meta = SCRIPT_KINDS.find((s) => s.v === d.kind) || SCRIPT_KINDS[1];
+  const isHttp = meta.cond === true;
+  const argMode = ARG_MODES.some((m) => m.v === d.argMode) ? d.argMode : 'none';
   return `
     <div class="grid">
       <div class="field">
         <label>脚本类型</label>
-        <select data-field="scriptType">${optionsHtml(SCRIPT_TYPES, d.scriptType || 'http-response')}</select>
+        <select data-field="kind">${optionsHtml(SCRIPT_KINDS, meta.v)}</select>
       </div>
       <div class="field">
-        <label>${meta.match ? meta.match : '（该类型无需匹配）'}</label>
-        <input type="text" data-field="match" value="${escapeHtml(d.match || '')}" ${meta.match ? '' : 'disabled'} placeholder="${meta.match === 'Cron 表达式' ? '0 8 * * *' : '^https?:\\/\\/api\\.example\\.com'}" />
+        <label>${meta.cond === 'cron' ? 'Cron 表达式（可写 ${参数名} 动态取值）' : isHttp ? 'URL 匹配正则' : '（该类型无需条件）'}</label>
+        <input type="text" data-field="match" value="${escapeHtml(d.match || '')}" ${meta.cond ? '' : 'disabled'} placeholder="${meta.cond === 'cron' ? '0 8 * * *' : '^https?:\\/\\/api\\.example\\.com\\/v1\\/user'}" />
       </div>
       <div class="field">
-        <label>脚本标签 · tag</label>
+        <label>标签 · tag</label>
         <input type="text" data-field="tag" value="${escapeHtml(d.tag || '')}" placeholder="DemoUser" />
       </div>
       <div class="field">
-        <label>超时（秒） · timeout</label>
-        <input type="number" min="1" data-field="timeout" value="${escapeHtml(d.timeout || '10')}" />
+        <label>超时（秒，可留空）</label>
+        <input type="number" min="1" data-field="timeout" value="${escapeHtml(d.timeout || '')}" />
       </div>
       <div class="field">
         <label>脚本文件名（导出用）</label>
         <input type="text" data-field="file" value="${escapeHtml(d.file || 'script.js')}" placeholder="demo.js" />
       </div>
       <div class="field">
-        <label>${meta.body ? 'requires-body' : '启用 · enable'}</label>
-        ${
-          meta.body
-            ? `<select data-field="requiresBody">${optionsHtml([{ v: 'true', label: 'true · 需要响应体' }, { v: 'false', label: 'false' }], d.requiresBody || 'true')}</select>`
-            : `<select data-field="enable">${optionsHtml([{ v: 'true', label: 'true · 启用' }, { v: 'false', label: 'false · 停用' }], d.enable || 'true')}</select>`
-        }
+        <label>启用 · enable</label>
+        <select data-field="enable">${optionsHtml([{ v: 'true', label: 'true · 启用' }, { v: 'false', label: 'false · 停用' }], d.enable || 'true')}</select>
       </div>
+      ${isHttp ? `
+      <div class="field">
+        <label>requires_body</label>
+        <select data-field="requiresBody">${optionsHtml([{ v: 'true', label: 'true · 等待完整 Body' }, { v: 'false', label: 'false' }], d.requiresBody || 'true')}</select>
+      </div>
+      <div class="field">
+        <label>binary_body_mode</label>
+        <select data-field="binaryMode">${optionsHtml([{ v: 'false', label: 'false' }, { v: 'true', label: 'true · 二进制 Body' }], d.binaryMode || 'false')}</select>
+      </div>` : ''}
+      <div class="field">
+        <label>$argument 传参方式</label>
+        <select data-field="argMode">${optionsHtml(ARG_MODES, argMode)}</select>
+      </div>
+      ${argMode === 'none' ? '' : `
       <div class="field span-all">
-        <label>script-path</label>
+        <label>${argMode === 'object' ? '对象参数（逗号分隔的参数名，需已在「参数」区块声明）' : argMode === 'raw' ? '原始字符串内容（按反引号原始字符串输出）' : '字符串参数内容'}</label>
+        <input type="text" data-field="argValue" value="${escapeHtml(d.argValue || '')}" placeholder="${argMode === 'object' ? 'token, region' : argMode === 'raw' ? '{"a":1}' : 'a=1&b=2'}" />
+      </div>`}
+      <div class="field span-all">
+        <label>script 路径</label>
         <input type="text" data-field="path" value="${escapeHtml(d.path || '')}" placeholder="https://.../scripts/demo.js 或 demo.js" />
         <span class="hint">远程脚本填完整 https 链接；本地脚本填文件名，并把 .js 放到 Loon 的脚本目录。</span>
       </div>
@@ -1024,9 +1607,7 @@ function renderScript(block) {
         <textarea data-field="code" rows="8">${escapeHtml(d.code || '')}</textarea>
       </div>
     </div>
-    <div class="note-box is-warn">
-      Loon 的 <code>.plugin</code> 文件里<b>不能内嵌 JS 代码</b>，只能通过 <code>script-path</code> 引用。这里的编辑器只是帮你把代码导出成 .js 文件。
-    </div>`;
+    <div class="note-box">输出形如 <code>response if \${url} ~= /正则/i then script("path", {\${token}}) with tag="…", timeout=10, requires_body=true</code>。response 脚本必须带 URL 正则（URL Guard）；对象传参会把参数打包成 <code>$argument</code> 对象。</div>`;
 }
 
 /* ========================= 预览面板（折叠 / 尺寸） ========================= */
@@ -1117,8 +1698,6 @@ function updateExportButton() {
   }
   /* 校验面板没有可复制的文本 */
   el.copyBtn.hidden = tab === 'issues';
-  /* 复写语法只影响 .plugin 输出，别的页签下藏着 */
-  el.previewFoot.hidden = tab !== 'plugin';
 }
 
 /* ========================= 渲染：预览 ========================= */
@@ -1301,7 +1880,7 @@ function bindEvents() {
   /* --- 画布：委托事件 --- */
   el.canvas.addEventListener('click', onCanvasClick);
   el.canvas.addEventListener('input', onCanvasField);
-  el.canvas.addEventListener('change', (event) => onCanvasField(event, true));
+  el.canvas.addEventListener('change', onCanvasField);
   bindDragAndDrop();
 
   /* --- 预览区：复制 / 导出 / 折叠 / 拖拽尺寸 --- */
@@ -1324,15 +1903,6 @@ function bindEvents() {
     state.tab = tab.dataset.tab;
     el.tabs.querySelectorAll('.tab').forEach((t) => t.classList.toggle('is-active', t === tab));
     renderPreview();
-  });
-
-  /* --- 复写语法切换 --- */
-  el.rewriteSyntax.value = state.rewriteSyntax;
-  el.rewriteSyntax.addEventListener('change', () => {
-    state.rewriteSyntax = el.rewriteSyntax.value;
-    renderPreview();
-    scheduleSave();
-    toast(state.rewriteSyntax === 'rewrite' ? '已切换到 [Rewrite]（pattern 类型 目标）' : '已切换到 [URL Rewrite]（pattern 目标 类型）');
   });
 }
 
@@ -1406,8 +1976,38 @@ function onCanvasClick(event) {
     return;
   }
 
+  if (action === 'add-arg') {
+    (block.data.items = block.data.items || []).push({ name: '', type: 'input', value: '', options: '', tag: '', desc: '', num: false });
+    afterStructureChange();
+    return;
+  }
+
+  if (action === 'del-arg') {
+    block.data.items.splice(Number(btn.dataset.idx), 1);
+    afterStructureChange();
+    return;
+  }
+
+  if (action === 'add-host') {
+    (block.data.items = block.data.items || []).push({ name: '', value: '' });
+    afterStructureChange();
+    return;
+  }
+
+  if (action === 'del-host') {
+    block.data.items.splice(Number(btn.dataset.idx), 1);
+    afterStructureChange();
+    return;
+  }
+
   if (action === 'add-rewrite') {
-    block.data.list.push({ from: '', to: '', type: '302' });
+    const phase = 'request';
+    (block.data.list = block.data.list || []).push({
+      phase,
+      cond: '',
+      capture: '',
+      actions: [{ v: 'request.header.add', args: ['', ''] }]
+    });
     afterStructureChange();
     return;
   }
@@ -1415,6 +2015,26 @@ function onCanvasClick(event) {
   if (action === 'del-rewrite') {
     block.data.list.splice(Number(btn.dataset.idx), 1);
     afterStructureChange();
+    return;
+  }
+
+  if (action === 'add-action') {
+    const item = block.data.list[Number(btn.dataset.idx)];
+    if (!item) return;
+    /* 新 Action 默认选 header.add（与所在阶段匹配），参数位按方法签名补空 */
+    const preferred = REWRITE_ACTIONS.find((a) => a.v === (item.phase === 'response' ? 'response.header.add' : 'request.header.add'));
+    const meta = preferred || REWRITE_ACTIONS.find((a) => a.phase === 'both' || a.phase === (item.phase || 'request'));
+    item.actions.push({ v: meta.v, args: meta.args.map(() => '') });
+    afterStructureChange();
+    return;
+  }
+
+  if (action === 'del-action') {
+    const item = block.data.list[Number(btn.dataset.idx)];
+    if (!item) return;
+    item.actions.splice(Number(btn.dataset.aidx), 1);
+    afterStructureChange();
+    return;
   }
 }
 
@@ -1433,7 +2053,7 @@ function afterStructureChange() {
 }
 
 /* ---------- 画布字段输入 ---------- */
-function onCanvasField(event, isChange) {
+function onCanvasField(event) {
   const input = event.target.closest('[data-field]');
   if (!input) return;
   const card = input.closest('.card');
@@ -1464,34 +2084,105 @@ function onCanvasField(event, isChange) {
     return;
   }
 
-  if (field === 'scriptType') {
-    block.data.scriptType = value;
-    afterStructureChange();
+  /* ---------- [Argument] ---------- */
+  if (block.type === 'argument') {
+    const row = input.closest('[data-idx]');
+    const item = block.data.items[Number(row ? row.dataset.idx : -1)];
+    if (!item) return;
+    if (field === 'type') {
+      item.type = value;
+      if (value === 'switch' && item.value !== 'false') item.value = 'true';
+      afterStructureChange();
+      return;
+    }
+    if (field === 'num') {
+      item.num = input.checked;
+      afterStructureChange();
+      return;
+    }
+    item[field] = value;
+    renderPreview();
+    scheduleSave();
     return;
   }
 
-  if (field === 'type' && block.type === 'rewrite') {
-    /* 切到 reject* 后目标地址输入框要跟着隐藏，所以这里需要重绘；
-       但重绘前必须先把新类型写回数据，否则选择会丢 */
-    const rwRow = input.closest('[data-idx]');
-    const rwItem = block.data.list[Number(rwRow ? rwRow.dataset.idx : -1)];
-    if (rwItem) rwItem.type = value;
-    afterStructureChange();
+  /* ---------- [General] / [Mitm]：平铺字段 ---------- */
+  if (block.type === 'general' || block.type === 'mitm') {
+    block.data[field] = value;
+    renderPreview();
+    scheduleSave();
     return;
   }
 
-  /* 普通字段：只更新数据 + 预览，避免输入框失焦 */
-  if (block.type === 'details' || block.type === 'hostnames' || block.type === 'script') {
+  /* ---------- [Host] ---------- */
+  if (block.type === 'host') {
+    const row = input.closest('[data-idx]');
+    const item = block.data.items[Number(row ? row.dataset.idx : -1)];
+    if (!item) return;
+    item[field] = value;
+    renderPreview();
+    scheduleSave();
+    return;
+  }
+
+  /* ---------- [Script] ---------- */
+  if (block.type === 'script') {
+    /* 类型 / 传参方式会改变表单结构，重绘；其余只更新数据，避免输入框失焦 */
+    if (field === 'kind' || field === 'argMode') {
+      block.data[field] = value;
+      afterStructureChange();
+      return;
+    }
+    block.data[field] = value;
+    renderPreview();
+    scheduleSave();
+    return;
+  }
+
+  /* ---------- [Rewrite]：嵌套的 Action 列表 ---------- */
+  if (block.type === 'rewrite') {
+    const row = input.closest('[data-idx]');
+    const item = block.data.list[Number(row ? row.dataset.idx : -1)];
+    if (!item) return;
+    if (field === 'phase') {
+      item.phase = value;
+      afterStructureChange();
+      return;
+    }
+    if (field === 'action-v') {
+      const arow = input.closest('[data-aidx]');
+      const act = item.actions[Number(arow ? arow.dataset.aidx : -1)];
+      if (!act) return;
+      const meta = REWRITE_ACTIONS.find((a) => a.v === value);
+      if (!meta) return;
+      act.v = value;
+      /* 参数位数量随新 Action 的方法签名变化，已有的输入尽量保留 */
+      act.args = meta.args.map((_, i) => act.args[i] || '');
+      afterStructureChange();
+      return;
+    }
+    if (field === 'action-arg') {
+      const arow = input.closest('[data-aidx]');
+      const act = item.actions[Number(arow ? arow.dataset.aidx : -1)];
+      if (!act) return;
+      act.args[Number(input.dataset.argidx)] = value;
+      renderPreview();
+      scheduleSave();
+      return;
+    }
+    item[field] = value;
+    renderPreview();
+    scheduleSave();
+    return;
+  }
+
+  /* ---------- 其余：details / rules ---------- */
+  if (block.type === 'details') {
     block.data[field] = value;
   } else if (block.type === 'rules') {
     const cond = resolveCondition(block.data.root, input.dataset.path || 'root');
     if (!cond) return;
     cond[field] = value;
-  } else if (block.type === 'rewrite') {
-    const row = input.closest('[data-idx]');
-    const item = block.data.list[Number(row ? row.dataset.idx : -1)];
-    if (!item) return;
-    item[field] = value;
   }
 
   renderPreview();

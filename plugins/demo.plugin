@@ -1,20 +1,30 @@
 #!name=Demo Plugin
-#!desc=一个最小的 Loon 插件示例，演示规则 / 复写 / 脚本 / MITM 四块组合
+#!desc=一个用于演示的 Loon 插件：8 个区块 + Loon 3.5.1 新语法
 #!icon=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png
 #!author=kyler404
 #!homepage=https://github.com/kyler404/loon-plugin-demo
 #!tag=Proxy
 #!system=iOS,iPadOS,tvOS,macOS
 
+[Argument]
+token = input, "默认令牌", tag=令牌, desc=用于脚本鉴权的令牌
+
+[General]
+bypass-tun = 192.168.0.0/16, 10.0.0.0/8
+
 [Rule]
 DOMAIN-SUFFIX,example.com,DIRECT
 AND,((DOMAIN-KEYWORD,ads),(USER-AGENT,*AdBot*)),REJECT
 
-[URL Rewrite]
-^https?:\/\/(www\.)?example\.cn\/path https://example.com/path 302
+[Rewrite]
+request if ${url} ~= /^https?:\/\/(www\.)?example\.cn\/path/ then url.replace("https://example.com/path")
+response if ${url} ~= /^https?:\/\/ads\.example\.com/ then reject_dict(200)
+
+[Host]
+example.com = server:223.5.5.5
 
 [Script]
-http-response ^https?:\/\/api\.example\.com\/v1\/user script-path=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js, requires-body=true, timeout=10, tag=DemoUser
+response if ${url} ~= /^https?:\/\/api\.example\.com\/v1\/user/i then script("https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js", {${token}}) with tag="DemoUser", timeout=10, requires_body=true
 
-[MITM]
+[Mitm]
 hostname = api.example.com, *.example.cn
