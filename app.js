@@ -179,7 +179,19 @@ const ICONS = {
   down: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14m0 0 5-5m-5 5-5-5"/></svg>',
   copy: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   more: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>',
-  trash: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-3h4l1 3m-9 0 1 13h10l1-13"/></svg>'
+  trash: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M9 7l1-3h4l1 3m-9 0 1 13h10l1-13"/></svg>',
+  alert: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4m0 4h.01"/></svg>',
+  check: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="m20 6-11 11-5-5"/></svg>',
+  info: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5m0-8h.01"/></svg>',
+  xCircle: '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6m0-6 6 6"/></svg>'
+};
+
+/* Toast 状态分级：图标 + 语义类名 */
+const TOAST_LEVELS = {
+  info: { icon: ICONS.info, cls: 'is-info' },
+  success: { icon: ICONS.check, cls: 'is-success' },
+  warn: { icon: ICONS.alert, cls: 'is-warn' },
+  error: { icon: ICONS.xCircle, cls: 'is-error' }
 };
 
 function uid() {
@@ -370,7 +382,7 @@ function addBlock(type) {
   renderPreview();
   updateChrome();
   scheduleSave();
-  toast(`已添加「${BLOCK_META[type].title}」区块`);
+  toast(`已添加「${BLOCK_META[type].title}」区块`, 'success');
 }
 
 /* ========================= 规则树操作 ========================= */
@@ -1125,7 +1137,7 @@ function renderPreview() {
         .map(
           (issue) => `
         <div class="issue ${issue.level === 'error' ? 'is-error' : 'is-warn'}">
-          <span class="issue-ico">${issue.level === 'error' ? '!' : '?'}</span>
+          <span class="issue-ico">${ICONS.alert}</span>
           <div class="issue-body">
             <p>${issue.msg}</p>
             ${issue.blockId ? `<button class="issue-jump" type="button" data-act="jump" data-id="${issue.blockId}">定位到区块</button>` : ''}
@@ -1134,11 +1146,11 @@ function renderPreview() {
         )
         .join('') +
       `<div class="issue is-ok">
-         <span class="issue-ico">✓</span>
+         <span class="issue-ico">${ICONS.check}</span>
          <div class="issue-body"><p>${errors.length ? `还有 ${errors.length} 个错误需要修正` : '没有错误，可以导出到 Loon 试试'}${warns.length ? `（另有 ${warns.length} 条提示）` : ''}。</p></div>
        </div>`
     : `<div class="issue is-ok">
-         <span class="issue-ico">✓</span>
+         <span class="issue-ico">${ICONS.check}</span>
          <div class="issue-body"><p>语法检查通过，没有发现问题。</p></div>
        </div>`;
 
@@ -1200,7 +1212,7 @@ function bindEvents() {
       const id = delBtn.dataset.pluginId;
       const plugin = state.plugins.find((p) => p.id === id);
       if (state.plugins.length === 1) {
-        toast('至少保留一个插件');
+        toast('至少保留一个插件', 'warn');
         return;
       }
       if (!window.confirm(`删除插件「${plugin ? plugin.name : ''}」？此操作不可撤销。`)) return;
@@ -1233,7 +1245,7 @@ function bindEvents() {
     state.selectedId = state.plugins[0].id;
     renderAll();
     scheduleSave();
-    toast('已恢复示例插件');
+    toast('已恢复示例插件', 'success');
   });
 
   /* --- 插件名 --- */
@@ -1573,22 +1585,22 @@ function downloadPlugin() {
   const { text, issues } = state.view;
   const errors = issues.filter((i) => i.level === 'error');
   if (errors.length) {
-    toast(`还有 ${errors.length} 个错误，已导出但 Loon 可能加载失败`);
+    toast(`还有 ${errors.length} 个错误，已导出但 Loon 可能加载失败`, 'error');
   }
   downloadFile(`${safeName()}.plugin`, text);
-  toast(`已导出 ${safeName()}.plugin`);
+  toast(`已导出 ${safeName()}.plugin`, 'success');
 }
 
 function downloadScripts() {
   const { scripts } = state.view;
   if (!scripts.length) {
-    toast('没有可导出的脚本代码');
+    toast('没有可导出的脚本代码', 'warn');
     return;
   }
   scripts.forEach((script, index) => {
     window.setTimeout(() => downloadFile(script.file, script.code + '\n'), index * 300);
   });
-  toast(`已导出 ${scripts.length} 个脚本文件`);
+  toast(`已导出 ${scripts.length} 个脚本文件`, 'success');
 }
 
 function copyCurrent() {
@@ -1598,13 +1610,13 @@ function copyCurrent() {
       ? scripts.map((s) => `${scripts.length > 1 ? `// ===== ${s.file} =====\n` : ''}${s.code}`).join('\n\n')
       : text;
   if (!content.trim()) {
-    toast('没有可复制的内容');
+    toast('没有可复制的内容', 'warn');
     return;
   }
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(content).then(
-      () => toast('已复制到剪贴板'),
-      () => toast('复制失败，请手动选择文本')
+      () => toast('已复制到剪贴板', 'success'),
+      () => toast('复制失败，请手动选择文本', 'error')
     );
   } else {
     const ta = document.createElement('textarea');
@@ -1613,9 +1625,9 @@ function copyCurrent() {
     ta.select();
     try {
       document.execCommand('copy');
-      toast('已复制到剪贴板');
+      toast('已复制到剪贴板', 'success');
     } catch (err) {
-      toast('复制失败，请手动选择文本');
+      toast('复制失败，请手动选择文本', 'error');
     }
     ta.remove();
   }
@@ -1625,17 +1637,29 @@ function copyCurrent() {
 
 let toastTimer = null;
 
-function toast(message) {
-  el.toast.textContent = message;
+function toast(message, level = 'info') {
+  const conf = TOAST_LEVELS[level] || TOAST_LEVELS.info;
+  /* 连续调用时保留显示态，避免重建结构导致闪一下 */
+  const wasShown = !el.toast.hidden && el.toast.classList.contains('is-show');
+
+  /* 图标来自常量可安全注入；文案走 textContent，避免内容里的尖括号被解析 */
+  el.toast.className = `toast ${conf.cls}${wasShown ? ' is-show' : ''}`;
+  el.toast.innerHTML = `<span class="toast-ico">${conf.icon}</span><span class="toast-text"></span>`;
+  el.toast.querySelector('.toast-text').textContent = message;
   el.toast.hidden = false;
-  const show = () => el.toast.classList.add('is-show');
-  if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(show);
-  else window.setTimeout(show, 16);
+
+  if (!wasShown) {
+    const show = () => el.toast.classList.add('is-show');
+    if (typeof window.requestAnimationFrame === 'function') window.requestAnimationFrame(show);
+    else window.setTimeout(show, 16);
+  }
+
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => {
     el.toast.classList.remove('is-show');
     window.setTimeout(() => {
-      el.toast.hidden = true;
+      /* 期间可能又有新 toast 进来，只在确实没内容要显示时才真正隐藏 */
+      if (!el.toast.classList.contains('is-show')) el.toast.hidden = true;
     }, 220);
   }, 2400);
 }

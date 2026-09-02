@@ -1770,9 +1770,15 @@ select {
   height: 18px;
   margin-top: 1px;
   border-radius: var(--r-full);
-  font-size: 11px;
-  font-weight: 800;
   color: var(--on-brand);
+}
+
+/* 小尺寸圆形色底里的图标：缩小并加粗描边，否则看不清 */
+.issue-ico .icon {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 11px;
+  stroke-width: 3.2;
 }
 
 .issue.is-error .issue-ico {
@@ -1848,12 +1854,17 @@ select {
   bottom: 28px;
   transform: translate(-50%, 12px);
   z-index: var(--z-toast);
+  display: flex;
+  align-items: center;
+  gap: 10px;
   max-width: 460px;
-  padding: 10px 18px;
+  padding: 9px 16px 9px 10px;
+  border: 1px solid var(--line);
   border-radius: var(--r-full);
-  background: var(--code-surface);
-  color: var(--surface-3);
+  background: var(--surface);
+  color: var(--text);
   font-size: 13px;
+  line-height: 1.45;
   box-shadow: var(--sh-3);
   opacity: 0;
   transition: opacity var(--motion-standard) var(--ease),
@@ -1867,6 +1878,57 @@ select {
 .toast.is-show {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+.toast-ico {
+  flex: 0 0 24px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-full);
+  background: var(--brand-600);
+  color: var(--on-brand);
+}
+
+.toast-ico .icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  stroke-width: 2.6;
+}
+
+.toast-text {
+  min-width: 0;
+}
+
+/* 状态色：info 走品牌蓝，其余复用 ok / warn / err 语义色 */
+.toast.is-info {
+  border-color: var(--brand-line);
+}
+.toast.is-info .toast-ico {
+  background: var(--brand-600);
+}
+
+.toast.is-success {
+  border-color: var(--ok-line);
+}
+.toast.is-success .toast-ico {
+  background: var(--ok);
+}
+
+.toast.is-warn {
+  border-color: var(--warn-line);
+}
+.toast.is-warn .toast-ico {
+  background: var(--warn);
+}
+
+.toast.is-error {
+  border-color: var(--err-line);
+}
+.toast.is-error .toast-ico {
+  background: var(--err);
 }
 
 /* =========================================================
