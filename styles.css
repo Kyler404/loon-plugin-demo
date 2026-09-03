@@ -1414,40 +1414,24 @@ select {
   background: var(--surface);
 }
 
-.row.is-rewrite {
-  grid-template-columns: 120px minmax(0, 1fr) 130px var(--ctl-sm);
-}
-
-/* 复写条目容器：头部条件行 + Action 列表 */
+/* 复写条目容器：头部（阶段）+ IF/THEN 两个 section */
 .rewrite-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--rewrite-line);
   border-radius: var(--r-md);
-  background: var(--surface-2);
-}
-
-.rewrite-item .row {
-  padding: 0;
-  border: none;
-  background: transparent;
+  background: var(--surface);
 }
 
 .action-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   margin-top: 8px;
   padding-left: 14px;
   border-left: 2px solid var(--rewrite-line);
-}
-
-/* 单个 Action 行：方法选择 + N 个参数位 */
-.row.is-action {
-  grid-template-columns: 210px repeat(auto-fit, minmax(140px, 1fr)) var(--ctl-sm);
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: var(--surface);
 }
 
 /* 参数条目：两行布局（第二行 desc 占满） */
@@ -1534,6 +1518,373 @@ select {
   flex: 1;
   height: 1px;
   background: var(--line);
+}
+
+/* =========================================================
+   复写区块 · rewrite-builder 对齐组件
+   条目（阶段头 / IF·THEN section）· 条件树 · Action 卡片
+   ========================================================= */
+
+/* ---------- 条目骨架 ---------- */
+.rewrite-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.rewrite-head .field:first-child {
+  width: 150px;
+  flex: 0 0 auto;
+}
+
+.rewrite-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.rewrite-section-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.rewrite-section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* 步骤序号小徽标：琥珀底，呼应复写区块主题色 */
+.step-no {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--r-full);
+  background: var(--rewrite-soft);
+  border: 1px solid var(--rewrite-line);
+  color: var(--rewrite);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.rewrite-foot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.rewrite-foot .add-row {
+  margin-top: 0;
+}
+
+/* 「载入官方示例」这类行内小字段 */
+.mini-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mini-field > span {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+}
+
+.mini-field select {
+  min-width: 170px;
+}
+
+/* ---------- 超小号按钮（AND/OR、flags、参数组操作） ---------- */
+.btn-xs {
+  min-height: 24px;
+  padding: 2px 9px;
+  font-size: 11px;
+  border-radius: var(--r-xs);
+}
+
+.btn-xs.is-active {
+  background: var(--rewrite-soft);
+  border-color: var(--rewrite);
+  color: var(--rewrite);
+  font-weight: 700;
+}
+
+/* ---------- 条件树 ---------- */
+/* 根分组：面板化；嵌套分组：沿父级左侧琥珀竖线缩进 */
+.cond-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.cond-group .cond-group {
+  margin-left: 18px;
+  padding: 8px 8px 8px 12px;
+  border: none;
+  border-left: 2px solid var(--rewrite-line);
+  border-radius: 0;
+  background: transparent;
+}
+
+.cond-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cond-group-title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.cond-group-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.cond-group-actions .add-row {
+  margin-top: 0;
+}
+
+/* AND / OR 切换：胶囊分段控件 */
+.logic-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  background: var(--surface-3);
+}
+
+.logic-toggle .btn-xs {
+  min-height: 20px;
+  padding: 1px 10px;
+  border: none;
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--muted);
+}
+
+.logic-toggle .btn-xs:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.logic-toggle .btn-xs.is-active {
+  background: var(--surface);
+  border: none;
+  box-shadow: var(--sh-1);
+  color: var(--rewrite);
+}
+
+/* 条件行：字段横向排布，可换行（字段数量随条件类型变化） */
+.row.is-cond {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+
+.row.is-cond .field {
+  flex: 0 1 auto;
+  min-width: 110px;
+}
+
+.row.is-cond .field.grow {
+  flex: 1 1 200px;
+}
+
+.row.is-cond .field .field,
+.row.is-cond .field:has(> .composite-input) {
+  flex: 1 1 200px;
+}
+
+/* 组合输入框：/ 正则 / 斜杠夹住输入框 */
+.composite-input {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.composite-input .input-affix {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--line-2);
+  background: var(--surface-3);
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 12px;
+  user-select: none;
+}
+
+.composite-input .input-affix:first-child {
+  border-right: none;
+  border-radius: var(--r-sm) 0 0 var(--r-sm);
+}
+
+.composite-input .input-affix:nth-of-type(2),
+.composite-input .input-affix:last-child {
+  border-left: none;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+
+.composite-input input {
+  flex: 1;
+  min-width: 0;
+  border-radius: 0;
+}
+
+.composite-input input:focus {
+  border-radius: 0;
+}
+
+/* 正则 flags 按钮组：i / m / s */
+.flag-group {
+  display: flex;
+  gap: 3px;
+  margin-left: 6px;
+  align-self: center;
+}
+
+.flag-group .btn-xs {
+  min-width: 24px;
+  padding: 2px 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+/* ---------- Action 卡片 ---------- */
+.action-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.action-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.action-head .field {
+  flex: 0 1 250px;
+  min-width: 190px;
+}
+
+/* Action 签名：实时回显序列化结果 */
+.action-sig {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: var(--surface-3);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+/* 参数组：批量语法的基本单位 */
+.param-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+}
+
+.param-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+.param-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.action-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.action-foot .add-row {
+  margin-top: 0;
+}
+
+.value-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* 复选框形态的 field（raw / base64 等） */
+.field.is-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  justify-content: flex-end;
+}
+
+.field.is-checkbox input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--rewrite);
+}
+
+.field.is-checkbox span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
 }
 
 /* =========================================================
@@ -2130,9 +2481,7 @@ select {
   }
 
   .row,
-  .row.is-rewrite,
   .row.is-argument,
-  .row.is-action,
   .row.is-host {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
@@ -2140,6 +2489,29 @@ select {
   .row-actions {
     grid-column: 1 / -1;
     justify-content: flex-start;
+  }
+
+  /* 复写：窄屏时条件行竖排，Action 签名换行展示 */
+  .row.is-cond,
+  .action-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .row.is-cond .field,
+  .row.is-cond .field.grow,
+  .action-head .field {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .action-sig {
+    white-space: normal;
+    word-break: break-all;
+  }
+
+  .cond-group .cond-group {
+    margin-left: 8px;
   }
 
   .subtree {

@@ -84,43 +84,258 @@ const ARG_MODES = [
   { v: 'object', label: '插件对象 · {${a}, ${b}}' }
 ];
 
-/** 复写 Action 参数类型：S=字符串（自动加引号）N=数字 R=正则 A=任意值（原样） */
+/* ========================= [Rewrite]（978 新语法） =========================
+ * 依据官方 Rewrite 配置生成器 https://nsloon.app/rewrite-builder
+ *   一条复写：<phase> if <条件树> then <Action>(…) | <Action>(…)
+ *   条件树：group{logic, items[]}，item 可是 condition 或嵌套 group，AND=&& / OR=||
+ *   Action：同一 Action 可填多组参数，多组时自动生成数组批量语法
+ */
+
+/** 复写阶段 */
 const REWRITE_PHASES = [
-  { v: 'request', label: 'request · 请求发出前' },
-  { v: 'response', label: 'response · 响应返回后' }
+  { v: 'request', label: 'request · 请求发出前', hint: '请求发出前' },
+  { v: 'response', label: 'response · 收到响应 Header 后', hint: '收到响应 Header 后' }
 ];
 
-/** 生成 request / response 两组同名 Action，避免手写 20 条重复定义 */
-function scopeActions(scope) {
-  return [
-    { v: `${scope}.header.add`, phase: scope, args: [{ n: 'Header 名', t: 'S', ph: 'X-Loon' }, { n: 'Header 值', t: 'S', ph: 'true' }] },
-    { v: `${scope}.header.set`, phase: scope, args: [{ n: 'Header 名', t: 'S', ph: 'Cache-Control' }, { n: 'Header 值', t: 'S', ph: 'no-cache' }] },
-    { v: `${scope}.header.del`, phase: scope, args: [{ n: 'Header 名', t: 'S', ph: 'Set-Cookie' }] },
-    { v: `${scope}.header.replace`, phase: scope, args: [{ n: 'Header 名', t: 'S', ph: 'Content-Type' }, { n: '正则', t: 'R', ph: '^(.+); charset=.+$' }, { n: '替换内容', t: 'S', ph: '$1' }] },
-    { v: `${scope}.body.replace`, phase: scope, args: [{ n: '正则', t: 'R', ph: '"vip":\\s*false' }, { n: '替换内容', t: 'S', ph: '"vip":true' }] },
-    { v: `${scope}.json.add`, phase: scope, args: [{ n: 'JSON 路径', t: 'S', ph: 'data.extra' }, { n: '值', t: 'A', ph: 'true' }] },
-    { v: `${scope}.json.delete`, phase: scope, args: [{ n: 'JSON 路径', t: 'S', ph: 'data.ads' }] },
-    { v: `${scope}.json.replace`, phase: scope, args: [{ n: 'JSON 路径', t: 'S', ph: 'data.vip' }, { n: '值', t: 'A', ph: 'true' }] },
-    { v: `${scope}.json.jq`, phase: scope, args: [{ n: 'jq 表达式', t: 'S', ph: '.data | del(.ads)' }] },
-    { v: `${scope}.json.jq_file`, phase: scope, args: [{ n: 'jq 文件路径', t: 'S', ph: 'filters/clean.jq' }] }
-  ];
+/** 条件字段：phases 限定该字段可用于哪些阶段；header=需填 Header 名；variable=需填参数名 */
+const REWRITE_FIELDS = [
+  { v: 'url', label: 'URL', phases: ['request', 'response'] },
+  { v: 'request.method', label: '请求方法', phases: ['request', 'response'] },
+  { v: 'request.header', label: '请求 Header', phases: ['request', 'response'], header: true },
+  { v: 'response.status', label: '响应状态码', phases: ['response'] },
+  { v: 'response.header', label: '响应 Header', phases: ['response'], header: true },
+  { v: 'plugin', label: '插件参数', phases: ['request', 'response'], variable: true }
+];
+
+/** 条件操作符 */
+const REWRITE_OPS = [
+  { v: '==', label: '等于 ==' },
+  { v: '~=', label: '正则匹配 ~=' }
+];
+
+/** 比较值类型：ops 限定可用操作符；regex 只用于正则匹配 */
+const REWRITE_VALUE_TYPES = [
+  { v: 'regex', label: '正则', ops: ['~='] },
+  { v: 'variable', label: '插件参数', ops: ['==', '~='] },
+  { v: 'string', label: '字符串', ops: ['=='] },
+  { v: 'number', label: '数字', ops: ['=='] },
+  { v: 'boolean', label: '布尔值', ops: ['=='] },
+  { v: 'null', label: 'null', ops: ['=='] },
+  { v: 'template', label: '模板字符串', ops: ['=='] },
+  { v: 'raw', label: 'Raw 反引号', ops: ['=='] },
+  { v: 'syntax', label: 'Raw Syntax 原样', ops: ['=='] }
+];
+
+/** reject 的响应类型 → 实际方法名 */
+const REJECT_MODES = [
+  { v: 'empty', label: '空 Body' },
+  { v: 'custom', label: '自定义文本' },
+  { v: 'image', label: '1×1 GIF' },
+  { v: 'json-object', label: 'JSON 对象 {}' },
+  { v: 'json-array', label: 'JSON 数组 []' },
+  { v: 'video', label: '空白视频' }
+];
+const REJECT_MODE_MAP = {
+  image: 'reject_img',
+  'json-object': 'reject_dict',
+  'json-array': 'reject_array',
+  video: 'reject_video'
+};
+
+/** Mock Body 的类型 */
+const MOCK_TYPES = ['json', 'text', 'css', 'html', 'javascript', 'plain', 'png', 'gif', 'jpeg', 'tiff', 'svg', 'mp4', 'form-data'].map((v) => ({
+  v,
+  label: v
+}));
+/** Mock / jq 的数据来源：直接填写 → mock(…)，插件文件 → mock_file(…) / jq_file(…) */
+const MOCK_SOURCES = [
+  { v: 'data', label: '直接填写' },
+  { v: 'file', label: '插件文件' }
+];
+const JQ_SOURCES = [
+  { v: 'filter', label: 'jq 表达式' },
+  { v: 'file', label: '插件文件' }
+];
+
+/**
+ * 生成 request / response 同构的 Action，避免手写 16 条重复定义
+ * @param {string} scope request | response
+ * @param {Object} overrides 按 key 覆盖官网默认值
+ */
+function scopedActions(scope, overrides) {
+  const zh = scope === 'response' ? '响应' : '请求';
+  const table = {
+    'header.add': { label: `添加${zh} Header`, group: `${zh} Header`, fields: ['name', 'value'], batch: true, defaults: { name: 'X-Loon', value: 'true' } },
+    'header.set': { label: `设置${zh} Header`, group: `${zh} Header`, fields: ['name', 'value'], batch: true, defaults: { name: 'X-Loon', value: 'true' } },
+    'header.del': { label: `删除${zh} Header`, group: `${zh} Header`, fields: ['name'], batch: true, defaults: { name: 'Cookie' } },
+    'header.replace': {
+      label: `正则替换${zh} Header`,
+      group: `${zh} Header`,
+      fields: ['name', 'pattern', 'replacement'],
+      batch: true,
+      defaults: { name: 'User-Agent', pattern: 'iPhone OS \\d+', flags: '', replacement: 'iPhone OS 18' }
+    },
+    'body.replace': {
+      label: `正则替换${zh} Body`,
+      group: `${zh} Body / JSON`,
+      fields: ['pattern', 'replacement'],
+      batch: true,
+      defaults: { pattern: '"price":\\s*[0-9.]+', flags: '', replacement: '"price":9.99' }
+    },
+    'json.add': {
+      label: `添加${zh} JSON 字段`,
+      group: `${zh} Body / JSON`,
+      fields: ['path', 'value'],
+      batch: true,
+      jsonValue: true,
+      defaults: { path: 'data.price', valueType: 'number', value: '9.99' }
+    },
+    'json.delete': { label: `删除${zh} JSON 字段`, group: `${zh} Body / JSON`, fields: ['path'], batch: true, defaults: { path: 'data.ads' } },
+    'json.replace': {
+      label: `替换${zh} JSON 字段`,
+      group: `${zh} Body / JSON`,
+      fields: ['path', 'value'],
+      batch: true,
+      jsonValue: true,
+      defaults: { path: 'data.vip', valueType: 'boolean', value: 'true' }
+    }
+  };
+  const out = {};
+  Object.keys(table).forEach((key) => {
+    const meta = table[key];
+    out[`${scope}.${key}`] = {
+      phase: scope,
+      label: meta.label,
+      group: meta.group,
+      fields: meta.fields,
+      batch: meta.batch,
+      jsonValue: meta.jsonValue,
+      defaults: Object.assign({}, meta.defaults, overrides[key] || {})
+    };
+  });
+  return out;
 }
 
-/** 复写 Action 速查表（方法签名与官方文档一致，位置参数按顺序） */
-const REWRITE_ACTIONS = [
-  { v: 'url.replace', phase: 'request', args: [{ n: '替换内容', t: 'S', ph: 'https://new.example.com${m.1}' }] },
-  { v: 'redirect', phase: 'request', args: [{ n: '状态码', t: 'N', ph: '302' }, { n: '目标 URL', t: 'S', ph: 'https://api.example.com' }] },
-  { v: 'reject', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }, { n: '响应体', t: 'S', opt: true, ph: '可选，UTF-8 文本' }] },
-  { v: 'reject_img', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }] },
-  { v: 'reject_dict', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }] },
-  { v: 'reject_array', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }] },
-  { v: 'reject_video', phase: 'both', args: [{ n: '状态码', t: 'N', ph: '200' }] },
-  ...scopeActions('request'),
-  ...scopeActions('response'),
-  { v: 'request.body.mock', phase: 'request', args: [{ n: '类型', t: 'S', ph: 'json' }, { n: '内容', t: 'S', ph: '{"code":0}' }, { n: '是否继续请求', t: 'A', opt: true, ph: 'false' }] },
-  { v: 'request.body.mock_file', phase: 'request', args: [{ n: '类型', t: 'S', ph: 'json' }, { n: '文件路径', t: 'S', ph: 'mock/user.json' }, { n: '是否继续请求', t: 'A', opt: true, ph: 'false' }] },
-  { v: 'response.body.mock', phase: 'response', args: [{ n: '类型', t: 'S', ph: 'json' }, { n: '内容', t: 'S', ph: '{"code":0}' }, { n: '状态码', t: 'N', opt: true, ph: '200' }, { n: '是否继续请求', t: 'A', opt: true, ph: 'false' }] },
-  { v: 'response.body.mock_file', phase: 'response', args: [{ n: '类型', t: 'S', ph: 'json' }, { n: '文件路径', t: 'S', ph: 'mock/user.json' }, { n: '状态码', t: 'N', opt: true, ph: '200' }, { n: '是否继续请求', t: 'A', opt: true, ph: 'false' }] }
+/**
+ * Action 速查表（方法签名与官方生成器一致）
+ * v: 方法名 / label: 中文名 / phase: 所属阶段 / group: 下拉分组
+ * fields: 表单字段顺序 / batch: 支持多组参数（批量语法）/ defaults: 新建时的默认值
+ */
+const REWRITE_ACTIONS = {
+  'url.replace': { label: '替换 URL', phase: 'request', group: '请求控制', fields: ['replacement'], defaults: { replacement: 'https://example.com' } },
+  redirect: { label: '返回重定向', phase: 'request', group: '请求控制', fields: ['status', 'location'], defaults: { status: '302', location: 'https://new.example.com' } },
+  reject: { label: '拒绝请求', phase: 'request', group: '请求控制', fields: ['mode', 'status', 'body'], defaults: { mode: 'json-object', status: '200', body: '' } },
+  ...scopedActions('request', {
+    'json.replace': { path: 'data.price', valueType: 'variable', value: 'price' }
+  }),
+  ...scopedActions('response', {
+    'header.set': { name: 'Cache-Control', value: 'no-cache' },
+    'header.del': { name: 'Set-Cookie' },
+    'header.replace': { name: 'Content-Type', pattern: '; charset=.+$', flags: 'i', replacement: '' },
+    'body.replace': { pattern: '"enabled":\\s*false', flags: '', replacement: '"enabled":true' },
+    'json.add': { path: 'data.rewritten', valueType: 'boolean', value: 'true' },
+    'json.replace': { path: 'data.vip', valueType: 'boolean', value: 'true' }
+  }),
+  'request.json.jq': {
+    label: '使用 jq 修改请求 JSON',
+    phase: 'request',
+    group: '请求 Body / JSON',
+    fields: ['source', 'filter', 'file'],
+    defaults: { source: 'filter', filter: '.data.ads = []', file: 'request-filter.jq' }
+  },
+  'response.json.jq': {
+    label: '使用 jq 修改响应 JSON',
+    phase: 'response',
+    group: '响应 Body / JSON',
+    fields: ['source', 'filter', 'file'],
+    defaults: { source: 'filter', filter: '.data.ads = []', file: 'response-filter.jq' }
+  },
+  'request.body.mock': {
+    label: 'Mock 请求 Body',
+    phase: 'request',
+    group: '请求 Body / JSON',
+    fields: ['type', 'source', 'data', 'file', 'raw', 'base64'],
+    defaults: { type: 'json', source: 'data', data: '{"price":9.99}', file: 'request_body.json', raw: true, base64: false }
+  },
+  'response.body.mock': {
+    label: 'Mock 响应 Body',
+    phase: 'response',
+    group: '响应 Body / JSON',
+    fields: ['type', 'source', 'data', 'file', 'raw', 'base64', 'status'],
+    defaults: { type: 'json', source: 'data', data: '{"code":0,"message":"ok"}', file: 'response_body.json', raw: true, base64: false, status: '200' }
+  }
+};
+
+/** Action 下拉分组（与官方生成器一致） */
+const REWRITE_ACTION_GROUPS = [
+  { label: '请求控制', actions: ['url.replace', 'redirect', 'reject'] },
+  { label: '请求 Header', actions: ['request.header.add', 'request.header.set', 'request.header.del', 'request.header.replace'] },
+  { label: '请求 Body / JSON', actions: ['request.body.replace', 'request.json.add', 'request.json.delete', 'request.json.replace', 'request.json.jq', 'request.body.mock'] },
+  { label: '响应 Header', actions: ['response.header.add', 'response.header.set', 'response.header.del', 'response.header.replace'] },
+  { label: '响应 Body / JSON', actions: ['response.body.replace', 'response.json.add', 'response.json.delete', 'response.json.replace', 'response.json.jq', 'response.body.mock'] }
+];
+
+/** 官方生成器的三套默认示例（照抄，作为「载入官方示例」与新建插件的默认模板） */
+function rewritePreset(kind) {
+  const presets = {
+    request: {
+      label: '请求 Header 清理',
+      phase: 'request',
+      conditions: { logic: '&&', items: [
+        { kind: 'condition', field: 'url', operator: '~=', valueType: 'regex', value: '^https:\\/\\/api\\.example\\.com', flags: '', headerName: '', variableName: '', captureName: '' },
+        { kind: 'condition', field: 'request.method', operator: '==', valueType: 'string', value: 'POST', flags: '', headerName: '', variableName: '', captureName: '' }
+      ] },
+      actions: [
+        { type: 'request.header.set', groups: [{ name: 'X-Loon', value: 'true' }] },
+        { type: 'request.header.del', groups: [{ name: 'Cookie' }] }
+      ]
+    },
+    response: {
+      label: '修改 JSON 响应',
+      phase: 'response',
+      conditions: { logic: '&&', items: [
+        { kind: 'condition', field: 'url', operator: '~=', valueType: 'regex', value: '^https:\\/\\/api\\.example\\.com\\/profile$', flags: '', headerName: '', variableName: '', captureName: '' },
+        { kind: 'condition', field: 'response.status', operator: '==', valueType: 'number', value: '200', flags: '', headerName: '', variableName: '', captureName: '' },
+        { kind: 'condition', field: 'response.header', operator: '~=', valueType: 'regex', value: '^application\\/json(?:;|$)', flags: 'i', headerName: 'Content-Type', variableName: '', captureName: '' }
+      ] },
+      actions: [
+        { type: 'response.json.replace', groups: [{ path: 'data.vip', valueType: 'boolean', value: 'true' }] },
+        { type: 'response.header.set', groups: [{ name: 'X-Rewritten', value: 'true' }] }
+      ]
+    },
+    mock: {
+      label: 'Mock JSON 响应',
+      phase: 'response',
+      conditions: { logic: '&&', items: [
+        { kind: 'condition', field: 'url', operator: '~=', valueType: 'regex', value: '^https:\\/\\/api\\.example\\.com\\/mock$', flags: '', headerName: '', variableName: '', captureName: '' }
+      ] },
+      actions: [
+        { type: 'response.body.mock', groups: [{ type: 'json', source: 'data', data: '{"code":0,"message":"ok"}', file: 'response_body.json', raw: true, base64: false, status: '200' }] }
+      ]
+    }
+  };
+  return presets[kind];
+}
+
+/** 新建条件时的默认值（照抄官方生成器） */
+function newCondition(overrides) {
+  return Object.assign(
+    { kind: 'condition', field: 'url', operator: '~=', valueType: 'regex', value: '^https:\\/\\/example\\.com', flags: '', headerName: '', variableName: '', captureName: '' },
+    overrides
+  );
+}
+
+/** 新建一个 Action（参数组默认取官方默认值） */
+function newAction(type) {
+  const meta = REWRITE_ACTIONS[type] || REWRITE_ACTIONS['request.header.set'];
+  return { type: meta.phase ? type : 'request.header.set', groups: [Object.assign({}, meta.defaults)] };
+}
+
+/** 官方示例的键与中文名 */
+const REWRITE_PRESET_KEYS = [
+  { v: 'request', label: '请求 Header 清理' },
+  { v: 'response', label: '修改 JSON 响应' },
+  { v: 'mock', label: 'Mock JSON 响应' }
 ];
 
 /** [General] 里插件可用的字段 */
@@ -189,23 +404,11 @@ const BLOCK_TEMPLATES = {
       }
     }
   },
+  /* 复写默认模板照抄官方生成器的「请求 Header 清理」与「修改 JSON 响应」两个示例 */
   rewrite: {
     type: 'rewrite',
     data: {
-      list: [
-        {
-          phase: 'request',
-          cond: '^https?:\\/\\/(www\\.)?example\\.cn\\/path',
-          capture: '',
-          actions: [{ v: 'url.replace', args: ['https://example.com/path'] }]
-        },
-        {
-          phase: 'response',
-          cond: '^https?:\\/\\/ads\\.example\\.com',
-          capture: '',
-          actions: [{ v: 'reject_dict', args: ['200'] }]
-        }
-      ]
+      list: [rewritePreset('request'), rewritePreset('response')]
     }
   },
   host: {
@@ -417,6 +620,75 @@ function scheduleSave() {
   }, 450);
 }
 
+/* ---------- 旧版草稿迁移：v2 初版复写条目 → 官网 rewrite-builder 结构 ---------- */
+
+/** 推断 JSON 值类型（旧版把值存成纯字符串） */
+function inferLoonValueType(v) {
+  const s = String(v);
+  if (/^-?\d+(\.\d+)?$/.test(s)) return 'number';
+  if (s === 'true' || s === 'false') return 'boolean';
+  if (s === 'null') return 'null';
+  return 'string';
+}
+
+/** 旧版位置参数（actions[i].args）→ 新参数组对象；旧 reject 家族统一为 reject + mode */
+function migrateRewriteAction(old) {
+  const v = old && old.v;
+  const args = Array.isArray(old && old.args) ? old.args : [];
+  const pick = (i) => (args[i] == null ? '' : String(args[i]));
+  if (/^reject(_img|_dict|_array|_video)?$/.test(v)) {
+    const mode = { reject: 'empty', reject_img: 'image', reject_dict: 'json-object', reject_array: 'json-array', reject_video: 'video' }[v];
+    const group = { mode, status: pick(0) || '200', body: '' };
+    if (v === 'reject' && pick(1)) group.body = pick(1);
+    return { type: 'reject', groups: [group] };
+  }
+  if (v === 'url.replace') return { type: v, groups: [{ replacement: pick(0) }] };
+  if (v === 'redirect') return { type: v, groups: [{ status: pick(0) || '302', location: pick(1) }] };
+  if (/\.header\.(add|set)$/.test(v)) return { type: v, groups: [{ name: pick(0), value: pick(1) }] };
+  if (/\.header\.del$/.test(v)) return { type: v, groups: [{ name: pick(0) }] };
+  if (/\.header\.replace$/.test(v)) return { type: v, groups: [{ name: pick(0), pattern: pick(1), flags: '', replacement: pick(2) }] };
+  if (/\.body\.replace$/.test(v)) return { type: v, groups: [{ pattern: pick(0), flags: '', replacement: pick(1) }] };
+  if (/\.json\.(add|replace)$/.test(v)) {
+    const value = pick(1);
+    return { type: v, groups: [{ path: pick(0), valueType: inferLoonValueType(value), value }] };
+  }
+  if (/\.json\.delete$/.test(v)) return { type: v, groups: [{ path: pick(0) }] };
+  if (/\.json\.jq$/.test(v)) return { type: v, groups: [{ source: 'filter', filter: pick(0) || '.data.ads = []', file: '' }] };
+  if (/\.body\.mock$/.test(v)) {
+    const group = { type: pick(0) || 'json', source: 'data', data: pick(1), raw: true, base64: false };
+    if (v === 'response.body.mock') group.status = pick(2) || '200';
+    return { type: v, groups: [group] };
+  }
+  return REWRITE_ACTIONS[v] ? { type: v, groups: [clone(REWRITE_ACTIONS[v].defaults)] } : null;
+}
+
+/** 旧版复写条目（cond 字符串 + actions[].args）→ 新条件树 + 参数组；无法迁移的条目返回 null */
+function migrateRewriteItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  /* 已是新结构：条件树是带 items 数组的分组对象（模板里组无 kind，运行时创建的组才有 kind:'group'） */
+  if (item.conditions && Array.isArray(item.conditions.items)) return item;
+  const phase = item.phase === 'response' ? 'response' : 'request';
+  /* 阶段不匹配的 Action 保留原样，交给校验面板提示（比静默丢弃更透明） */
+  const actions = (Array.isArray(item.actions) ? item.actions : [])
+    .map(migrateRewriteAction)
+    .filter((a) => a && REWRITE_ACTIONS[a.type]);
+  if (!actions.length) return null;
+  const condValue = String(item.cond || '');
+  const cond = newCondition({
+    field: 'url',
+    operator: '~=',
+    valueType: 'regex',
+    value: condValue,
+    flags: ''
+  });
+  if (item.capture) cond.captureName = String(item.capture);
+  return {
+    phase,
+    conditions: { logic: '&&', items: [cond] },
+    actions
+  };
+}
+
 function loadState() {
   let raw = null;
   try {
@@ -444,6 +716,10 @@ function loadState() {
   }
   state.plugins.forEach((p) => p.blocks.forEach((b) => {
     if (!b.id) b.id = uid();
+    /* 旧版复写草稿迁移到官网 rewrite-builder 结构 */
+    if (b.type === 'rewrite' && b.data && Array.isArray(b.data.list)) {
+      b.data.list = b.data.list.map(migrateRewriteItem).filter(Boolean);
+    }
   }));
 }
 
@@ -789,11 +1065,16 @@ function wrapRegex(pattern, extraFlags = '') {
     p = p.slice(1, last);
   }
   if (!p) return null;
-  /* 未转义的 / 自动补转义（URL 正则里极其常见），已转义的不动 */
+  /* 未转义的 / 自动补转义（URL 正则里极其常见），已转义的不动。
+     先把已有的转义序列整段换成占位符，否则里面的 / 会被二次转义成 \\/ */
+  const escaped = [];
   p = p
-    .replace(/\\[\s\S]/g, (m) => `\u0000${m}`)
+    .replace(/\\[\s\S]/g, (m) => {
+      escaped.push(m);
+      return `\u0000${escaped.length - 1}\u0000`;
+    })
     .replace(/\//g, '\\/')
-    .replace(/\u0000/g, '');
+    .replace(/\u0000(\d+)\u0000/g, (m, i) => escaped[Number(i)]);
   try {
     new RegExp(p);
   } catch (err) {
@@ -808,7 +1089,8 @@ const PLUGIN_REF_RE = /\$\{([A-Za-z_]\w*)/g;
 /** 扫描 ${name} 引用；返回 true 表示发现未声明的参数（错误已记录） */
 function checkPluginRefs(text, argNames, captureName, add, blockId, what) {
   const known = new Set(['url', 'request', 'response', ...argNames]);
-  if (captureName) known.add(captureName);
+  /* captureName 可以是单个捕获名，也可以是条件树里收集到的一组 */
+  [].concat(captureName || []).forEach((name) => name && known.add(name));
   const unknown = new Set();
   let m;
   PLUGIN_REF_RE.lastIndex = 0;
@@ -871,115 +1153,393 @@ function serializeArgument(item, add, blockId) {
 
 /* ---------- [Rewrite]（978 新语法） ---------- */
 
-/** 序列化一条复写：<phase> if <cond>[ as <name>] then <action>(...) | <action>(...) */
-function serializeRewrite(item, argNames, add, blockId) {
-  const phase = item.phase === 'response' ? 'response' : 'request';
-  const pattern = (item.cond || '').trim();
-  if (!pattern) {
-    add('error', '复写缺少 URL 匹配正则，该行不会生成。', blockId);
-    return null;
-  }
-  const regex = wrapRegex(pattern);
-  if (!regex) {
-    add('error', `复写正则 <code>${escapeHtml(pattern)}</code> 无法编译，请检查语法。`, blockId);
-    return null;
-  }
-
-  const capture = (item.capture || '').trim();
-  if (capture) {
-    if (!/^[A-Za-z_]\w*$/.test(capture)) {
-      add('error', `捕获名 <code>${escapeHtml(capture)}</code> 只能由字母 / 数字 / 下划线组成且不以数字开头。`, blockId);
-      return null;
-    }
-    if (argNames.has(capture)) {
-      add('error', `捕获名 <code>${escapeHtml(capture)}</code> 与插件参数重名，Loon 加载时会拒绝。`, blockId);
-      return null;
-    }
-  }
-
-  const list = item.actions || [];
-  if (!list.length) {
-    add('error', '复写没有任何 Action，该行不会生成。', blockId);
-    return null;
-  }
-  const actions = [];
-  list.forEach((action, index) => {
-    const text = serializeRewriteAction(action, phase, index, add, blockId);
-    if (text) actions.push(text);
-  });
-  if (actions.length !== list.length) return null;
-
-  /* 官方限制：一条复写最多一个 response.body.mock(_file)，且除它之外只能组合 response.header.* */
-  const mocks = list.filter((a) => /^response\.body\.mock(_file)?$/.test(a.v || ''));
-  if (mocks.length > 1) {
-    add('error', '一条复写只能包含一个 <code>response.body.mock(_file)</code>，该行不会生成。', blockId);
-    return null;
-  }
-  if (mocks.length === 1) {
-    const bad = list.find((a) => !/^response\.body\.mock(_file)?$/.test(a.v || '') && !/^response\.header\./.test(a.v || ''));
-    if (bad) {
-      add('error', `包含响应 Mock 的复写只能搭配 <code>response.header.*</code> Action（当前还含 <code>${escapeHtml(bad.v)}</code>），该行不会生成。`, blockId);
-      return null;
-    }
-  }
-
-  const head = `${phase} if \${url} ~= ${regex}${capture ? ` as ${capture}` : ''} then `;
-  const body = actions.join(' | ');
-  /* 条件由本工具固定生成（不会引用参数），只需要校验 Action 里的 ${name} */
-  if (checkPluginRefs(body, argNames, capture, add, blockId, '这条复写')) return null;
-  return head + body;
+/** Loon 字符串字面量：双引号 + 转义 */
+function loonStr(value) {
+  return `"${quoteLoonString(value)}"`;
 }
 
-/** 序列化单个 Action：按 REWRITE_ACTIONS 的参数表做类型化输出 */
+/** Loon 反引号原始字符串：内部反引号加倍 */
+function loonRaw(value) {
+  return `\`${String(value).replace(/`/g, '``')}\``;
+}
+
+/** Header 名放进单引号里的转义 */
+function loonHeaderName(value) {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'");
+}
+
+/** 状态码是否合法（100–599） */
+function isStatus(value) {
+  const text = String(value).trim();
+  return /^\d+$/.test(text) && Number(text) >= 100 && Number(text) <= 599;
+}
+
+/** 按值类型序列化比较值（与官方生成器一致） */
+function loonValue(valueType, value) {
+  switch (valueType) {
+    case 'number': {
+      const text = String(value).trim();
+      return text || '0';
+    }
+    case 'boolean':
+      return value === 'false' ? 'false' : 'true';
+    case 'null':
+      return 'null';
+    case 'variable':
+      return `\${${String(value).trim()}}`;
+    case 'raw':
+      return loonRaw(value);
+    case 'syntax':
+      return String(value).trim();
+    default:
+      /* string / template */
+      return loonStr(value);
+  }
+}
+
+/** 条件左侧的内置变量 */
+function condVariable(cond) {
+  if (cond.field === 'request.header') return `\${request.header['${loonHeaderName(cond.headerName)}']}`;
+  if (cond.field === 'response.header') return `\${response.header['${loonHeaderName(cond.headerName)}']}`;
+  if (cond.field === 'plugin') return `\${${String(cond.variableName).trim()}}`;
+  return `\${${cond.field}}`;
+}
+
+/** 序列化单个条件：<变量> <操作符> <值>[ as <捕获名>] */
+function serializeRewriteCond(cond, add, blockId) {
+  const left = condVariable(cond);
+  let right;
+  if (cond.operator === '~=') {
+    right = cond.valueType === 'variable' ? `\${${String(cond.value).trim()}}` : wrapRegex(cond.value, cond.flags || '');
+    if (!right) {
+      add('error', `复写条件的正则 <code>${escapeHtml(cond.value)}</code> 为空或无法编译，该行不会生成。`, blockId);
+      return null;
+    }
+  } else {
+    right = loonValue(cond.valueType, cond.value);
+  }
+  const capture = String(cond.captureName || '').trim();
+  const as = cond.operator === '~=' && capture ? ` as ${capture}` : '';
+  return `${left} ${cond.operator} ${right}${as}`;
+}
+
+/** 序列化条件组：组内用 && / || 连接，子组含多项时加括号 */
+function serializeRewriteGroup(group, add, blockId, isRoot) {
+  const items = (group && group.items) || [];
+  if (!items.length) {
+    add('error', '复写的条件组不能为空，该行不会生成。', blockId);
+    return null;
+  }
+  const parts = items.map((child) =>
+    child.kind === 'group' ? serializeRewriteGroup(child, add, blockId, false) : serializeRewriteCond(child, add, blockId)
+  );
+  if (parts.some((part) => part === null)) return null;
+  const logic = group.logic === '||' ? '||' : '&&';
+  const text = parts.join(` ${logic} `);
+  return !isRoot && items.length > 1 ? `(${text})` : text;
+}
+
+/** 实际输出的方法名：reject 按响应类型换名；jq / mock 用插件文件时加 _file 后缀 */
+function rewriteActionName(type, fields) {
+  if (type === 'reject') return REJECT_MODE_MAP[fields.mode] || 'reject';
+  if ((type.endsWith('.json.jq') || type.endsWith('.body.mock')) && fields.source === 'file') return `${type}_file`;
+  return type;
+}
+
+/** 多组参数 → 数组批量语法 */
+function serializeRewriteBatch(type, name, groups) {
+  const arr = (list) => `[${list.join(', ')}]`;
+  if (type.endsWith('.header.add') || type.endsWith('.header.set')) {
+    return `${name}(${arr(groups.map((g) => loonStr(g.name)))}, ${arr(groups.map((g) => loonStr(g.value)))})`;
+  }
+  if (type.endsWith('.header.del')) return `${name}(${arr(groups.map((g) => loonStr(g.name)))})`;
+  if (type.endsWith('.header.replace')) {
+    return `${name}(${arr(groups.map((g) => loonStr(g.name)))}, ${arr(groups.map((g) => wrapRegex(g.pattern, g.flags || '')))}, ${arr(
+      groups.map((g) => loonStr(g.replacement))
+    )})`;
+  }
+  if (type.endsWith('.body.replace')) {
+    return `${name}(${arr(groups.map((g) => wrapRegex(g.pattern, g.flags || '')))}, ${arr(groups.map((g) => loonStr(g.replacement)))})`;
+  }
+  if (type.endsWith('.json.delete')) return `${name}(${arr(groups.map((g) => loonStr(g.path)))})`;
+  if (type.endsWith('.json.add') || type.endsWith('.json.replace')) {
+    return `${name}(${arr(groups.map((g) => loonStr(g.path)))}, ${arr(groups.map((g) => loonValue(g.valueType, g.value)))})`;
+  }
+  return `${name}()`;
+}
+
+/** 序列化一个 Action（含参数组） */
 function serializeRewriteAction(action, phase, index, add, blockId) {
-  const meta = REWRITE_ACTIONS.find((a) => a.v === action.v);
+  const meta = REWRITE_ACTIONS[action.type];
   if (!meta) {
     add('error', `复写第 ${index + 1} 个 Action 无效，该行不会生成。`, blockId);
     return null;
   }
-  if (meta.phase !== 'both' && meta.phase !== phase) {
-    add('error', `<code>${meta.v}</code> 只能用于 ${meta.phase} 阶段，当前复写是 ${phase}，该行不会生成。`, blockId);
+  if (meta.phase !== phase) {
+    add('error', `<code>${action.type}</code> 只能用于 ${meta.phase} 阶段，当前复写是 ${phase}，该行不会生成。`, blockId);
+    return null;
+  }
+  const groups = action.groups && action.groups.length ? action.groups : [meta.defaults];
+  const g = groups[0];
+  const name = rewriteActionName(action.type, g);
+
+  if (action.type === 'url.replace') return `${name}(${loonStr(g.replacement)})`;
+  if (action.type === 'redirect') return `${name}(${g.status || '302'}, ${loonStr(g.location)})`;
+  if (action.type === 'reject') {
+    const args = [g.status || '200'];
+    if (g.mode === 'custom' && g.body) args.push(loonStr(g.body));
+    return `${name}(${args.join(', ')})`;
+  }
+  if (groups.length > 1 && meta.batch) return serializeRewriteBatch(action.type, name, groups);
+
+  if (action.type.endsWith('.header.add') || action.type.endsWith('.header.set')) {
+    return `${name}(${loonStr(g.name)}, ${loonStr(g.value)})`;
+  }
+  if (action.type.endsWith('.header.del')) return `${name}(${loonStr(g.name)})`;
+  if (action.type.endsWith('.header.replace')) {
+    return `${name}(${loonStr(g.name)}, ${wrapRegex(g.pattern, g.flags || '')}, ${loonStr(g.replacement)})`;
+  }
+  if (action.type.endsWith('.body.replace')) {
+    return `${name}(${wrapRegex(g.pattern, g.flags || '')}, ${loonStr(g.replacement)})`;
+  }
+  if (action.type.endsWith('.json.delete')) return `${name}(${loonStr(g.path)})`;
+  if (action.type.endsWith('.json.add') || action.type.endsWith('.json.replace')) {
+    return `${name}(${loonStr(g.path)}, ${loonValue(g.valueType, g.value)})`;
+  }
+  if (action.type.endsWith('.json.jq')) {
+    return `${name}(${loonStr(g.source === 'file' ? g.file : g.filter)})`;
+  }
+  if (action.type.endsWith('.body.mock')) {
+    const key = g.source === 'file' ? 'file' : 'data';
+    const content = g.source === 'data' && g.raw ? loonRaw(g.data) : loonStr(g[key]);
+    const args = [loonStr(g.type), content];
+    if (action.type === 'response.body.mock') args.push(g.status || '200');
+    if (g.base64) args.push('true');
+    return `${name}(${args.join(', ')})`;
+  }
+  return `${name}()`;
+}
+
+/** 校验条件组内的字段（规则与官方生成器一致） */
+function validateRewriteGroup(group, phase, add, blockId) {
+  const items = (group && group.items) || [];
+  if (!items.length) {
+    add('error', '复写的条件组不能为空，该行不会生成。', blockId);
+    return true;
+  }
+  let failed = false;
+  const err = (msg) => {
+    add('error', msg, blockId);
+    failed = true;
+  };
+  items.forEach((child) => {
+    if (child.kind === 'group') {
+      if (validateRewriteGroup(child, phase, add, blockId)) failed = true;
+      return;
+    }
+    const meta = REWRITE_FIELDS.find((f) => f.v === child.field);
+    if (meta && meta.phases && !meta.phases.includes(phase)) {
+      err(`<code>${child.field}</code> 不能用于 ${phase} 阶段的条件，该行不会生成。`);
+    }
+    if ((child.field === 'request.header' || child.field === 'response.header') && !String(child.headerName || '').trim()) {
+      err('复写条件的 Header 名称不能为空，该行不会生成。');
+    }
+    if (child.field === 'plugin' && !/^[A-Za-z_]\w*$/.test(String(child.variableName || '').trim())) {
+      err('复写条件的插件参数名格式不正确，该行不会生成。');
+    }
+    if (child.operator === '~=' && child.valueType === 'regex' && !String(child.value || '').trim()) {
+      err('复写条件的正则内容不能为空，该行不会生成。');
+    }
+    if (child.valueType === 'variable' && !/^[A-Za-z_]\w*(?:\.\d+)?$/.test(String(child.value || '').trim())) {
+      err('复写条件右侧的变量名格式不正确，该行不会生成。');
+    }
+    if (child.valueType === 'syntax' && !String(child.value || '').trim()) {
+      err('复写条件的 Raw Syntax 不能为空，该行不会生成。');
+    }
+    if (child.operator === '==' && child.valueType === 'number') {
+      const text = String(child.value || '').trim();
+      if (text === '' || !Number.isFinite(Number(text))) err('复写条件的数字值格式不正确，该行不会生成。');
+    }
+    const capture = String(child.captureName || '').trim();
+    if (capture && !/^[A-Za-z_]\w*$/.test(capture)) {
+      err(`捕获名 <code>${escapeHtml(capture)}</code> 格式不正确，该行不会生成。`);
+    }
+  });
+  return failed;
+}
+
+/** 收集条件树的结构信息（捕获名 / 插件参数 / 响应引用 / 必选 URL 正则数） */
+function collectRewriteInfo(group, mandatory, info) {
+  const out =
+    info || { captures: [], optionalCaptures: [], pluginRefs: [], responseRefs: [], urlRegexCount: 0 };
+  const items = (group && group.items) || [];
+  const childMandatory = mandatory && (group.logic !== '||' || items.length === 1);
+  items.forEach((child) => {
+    if (child.kind === 'group') {
+      collectRewriteInfo(child, childMandatory, out);
+      return;
+    }
+    if (child.field === 'plugin') out.pluginRefs.push(String(child.variableName || '').trim());
+    if (child.field.startsWith('response.')) out.responseRefs.push(child.field);
+    const capture = String(child.captureName || '').trim();
+    if (capture) {
+      out.captures.push(capture);
+      if (!childMandatory) out.optionalCaptures.push(capture);
+    }
+    if (childMandatory && child.field === 'url' && child.operator === '~=') out.urlRegexCount += 1;
+  });
+  return out;
+}
+
+/** 收集条件树里所有捕获名（用于 ${…} 引用校验） */
+function collectCaptures(group, list) {
+  const out = list || [];
+  ((group && group.items) || []).forEach((child) => {
+    if (child.kind === 'group') collectCaptures(child, out);
+    else if (String(child.captureName || '').trim()) out.push(String(child.captureName).trim());
+  });
+  return out;
+}
+
+/** 校验 Action 的每组参数（规则与官方生成器一致） */
+function validateRewriteAction(action, add, blockId) {
+  const meta = REWRITE_ACTIONS[action.type];
+  if (!meta) return true;
+  let failed = false;
+  const groups = action.groups && action.groups.length ? action.groups : [meta.defaults];
+  groups.forEach((g, gi) => {
+    const prefix = groups.length > 1 ? `第 ${gi + 1} 组参数：` : '';
+    const err = (msg) => {
+      add('error', `${prefix}${msg}`, blockId);
+      failed = true;
+    };
+    if (action.type === 'url.replace') {
+      if (!String(g.replacement || '').trim()) err('URL 替换内容不能为空。');
+      if (/\$\d+/.test(String(g.replacement || ''))) err('URL 替换内容不能使用 $n，请在条件里用 as 捕获，再以 ${名称.n} 引用。');
+    }
+    if (action.type === 'redirect') {
+      if (!String(g.location || '').trim()) err('重定向地址不能为空。');
+      if (/\$\d+/.test(String(g.location || ''))) err('重定向地址不能使用 $n，请在条件里用 as 捕获，再以 ${名称.n} 引用。');
+    }
+    if (action.type === 'reject' && !isStatus(g.status)) err('Reject 状态码必须是 100 到 599 的整数。');
+    if (action.type.includes('.header.') && !String(g.name || '').trim()) err('Header 名称不能为空。');
+    if ((action.type.endsWith('.header.add') || action.type.endsWith('.header.set')) && g.value === undefined) {
+      err('Header 值不能为空。');
+    }
+    if ((action.type.endsWith('.header.replace') || action.type.endsWith('.body.replace')) && !String(g.pattern || '').trim()) {
+      err('替换正则不能为空。');
+    }
+    if (action.type.includes('.json.') && !action.type.endsWith('.json.jq')) {
+      if (!String(g.path || '').trim()) err('JSON Key Path 不能为空。');
+      if (action.type.endsWith('.json.add') || action.type.endsWith('.json.replace')) {
+        const text = String(g.value || '').trim();
+        if (g.valueType === 'number' && (text === '' || !Number.isFinite(Number(text)))) err('JSON 数字值格式不正确。');
+        if (g.valueType === 'variable' && !/^[A-Za-z_]\w*(?:\.\d+)?$/.test(text)) err('JSON 变量名格式不正确。');
+      }
+    }
+    if (action.type.endsWith('.json.jq')) {
+      const source = g.source === 'file' ? g.file : g.filter;
+      if (!String(source || '').trim()) err(g.source === 'file' ? 'jq 文件名不能为空。' : 'jq 表达式不能为空。');
+    }
+    if (action.type.endsWith('.body.mock')) {
+      if (g.source === 'file' && !String(g.file || '').trim()) err('Mock 文件名不能为空。');
+      if (action.type === 'response.body.mock' && !isStatus(g.status)) err('Mock 响应状态码必须是 100 到 599 的整数。');
+    }
+  });
+  return failed;
+}
+
+/** 整条复写的结构级校验（规则与官方生成器一致） */
+function validateRewriteItem(item, phase, argNames, add, blockId) {
+  let failed = false;
+  if (validateRewriteGroup(item.conditions, phase, add, blockId)) failed = true;
+
+  const actions = item.actions || [];
+  actions.forEach((action) => {
+    if (validateRewriteAction(action, add, blockId)) failed = true;
+  });
+
+  const info = collectRewriteInfo(item.conditions, true);
+  const dup = [...new Set(info.captures.filter((name, i) => info.captures.indexOf(name) !== i))];
+  if (dup.length) {
+    add('error', `捕获名称不能重复：${escapeHtml(dup.join('、'))}，该行不会生成。`, blockId);
+    failed = true;
+  }
+  const clash = [...new Set(info.captures.filter((name) => argNames.has(name)))];
+  if (clash.length) {
+    add('error', `捕获名称不能与插件参数重名：${escapeHtml(clash.join('、'))}，该行不会生成。`, blockId);
+    failed = true;
+  }
+  const optional = [...new Set(info.optionalCaptures)];
+  if (optional.length) {
+    add('warn', `捕获 ${escapeHtml(optional.join('、'))} 位于 OR 的可选分支中，可能取不到值。`, blockId);
+  }
+
+  /* URL 修改必须有且只有一个「必选」的 URL 正则条件 */
+  if (actions.some((a) => a.type === 'url.replace' || a.type === 'redirect')) {
+    if (info.urlRegexCount === 0) {
+      add('error', 'URL 修改需要一个必选的 URL 正则条件（<code>${url} ~= /…/</code>），该行不会生成。', blockId);
+      failed = true;
+    } else if (info.urlRegexCount > 1) {
+      add('error', 'URL 修改只能对应一个必选的 URL 正则条件，该行不会生成。', blockId);
+      failed = true;
+    }
+  }
+
+  /* Response Mock 的组合限制：它是在请求发出前生成的，拿不到真实响应 */
+  const mocks = actions.filter((a) => a.type === 'response.body.mock');
+  if (mocks.length > 1) {
+    add('error', '一条复写只能包含一个 Response Mock，该行不会生成。', blockId);
+    failed = true;
+  }
+  if (mocks.length) {
+    if (actions.some((a) => a.type !== 'response.body.mock' && !a.type.startsWith('response.header.'))) {
+      add('error', 'Response Mock 只能与响应 Header Action 组合，该行不会生成。', blockId);
+      failed = true;
+    }
+    if (info.responseRefs.length) {
+      add('error', 'Response Mock 的条件不能引用响应状态码或响应 Header，该行不会生成。', blockId);
+      failed = true;
+    }
+    const bad = mocks.some((action) => {
+      const g = (action.groups && action.groups[0]) || {};
+      const text = g.source === 'file' ? g.file : g.raw ? '' : g.data;
+      return String(text).includes('${response.');
+    });
+    if (bad) {
+      add('error', 'Response Mock 的参数不能引用尚未生成的响应变量，该行不会生成。', blockId);
+      failed = true;
+    }
+  }
+  return failed;
+}
+
+/** 序列化一条复写：<phase> if <条件树> then <Action>(…) | <Action>(…) */
+function serializeRewrite(item, argNames, add, blockId) {
+  const phase = item.phase === 'response' ? 'response' : 'request';
+  const conditions = serializeRewriteGroup(item.conditions, add, blockId, true);
+  if (conditions === null) return null;
+
+  const actions = item.actions || [];
+  if (!actions.length) {
+    add('error', '复写没有任何 Action，该行不会生成。', blockId);
     return null;
   }
 
-  const values = [];
-  for (let i = 0; i < meta.args.length; i += 1) {
-    const spec = meta.args[i];
-    const raw = String((action.args || [])[i] || '').trim();
-    if (!raw) {
-      if (spec.opt) break;
-      add('error', `<code>${meta.v}</code> 缺少参数「${spec.n}」，该行不会生成。`, blockId);
-      return null;
-    }
-    if (spec.t === 'N') {
-      if (!/^\d+$/.test(raw)) {
-        add('error', `<code>${meta.v}</code> 的「${spec.n}」应为数字，当前是 <code>${escapeHtml(raw)}</code>。`, blockId);
-        return null;
-      }
-      if (meta.v === 'redirect' && raw !== '302' && raw !== '307') {
-        add('error', `<code>redirect</code> 当前只支持 302 / 307 状态码，该行不会生成。`, blockId);
-        return null;
-      }
-      if (/^reject/.test(meta.v) && (Number(raw) < 100 || Number(raw) > 599)) {
-        add('error', `<code>${meta.v}</code> 的状态码必须在 100–599 之间，该行不会生成。`, blockId);
-        return null;
-      }
-      values.push(raw);
-    } else if (spec.t === 'R') {
-      const regex = wrapRegex(raw);
-      if (!regex) {
-        add('error', `<code>${meta.v}</code> 的「${spec.n}」不是合法正则，该行不会生成。`, blockId);
-        return null;
-      }
-      values.push(regex);
-    } else if (spec.t === 'S') {
-      values.push(`"${quoteLoonString(raw)}"`);
-    } else {
-      values.push(raw);
-    }
+  const parts = [];
+  for (let i = 0; i < actions.length; i += 1) {
+    const text = serializeRewriteAction(actions[i], phase, i, add, blockId);
+    if (text === null) return null;
+    parts.push(text);
   }
 
-  return `${meta.v}(${values.join(', ')})`;
+  if (validateRewriteItem(item, phase, argNames, add, blockId)) return null;
+
+  const line = `${phase} if ${conditions} then ${parts.join(' | ')}`;
+  if (checkPluginRefs(line, argNames, collectCaptures(item.conditions), add, blockId, '这条复写')) return null;
+  return line;
 }
 
 /* ---------- [Script]（983 新语法） ---------- */
@@ -1481,72 +2041,308 @@ function renderRuleRows(conditions, blockId, parentPath) {
 }
 
 /** [Rewrite]（978 新语法）：一条复写 = 阶段 + URL 正则 + 可选捕获名 + 多个 Action */
+/* ---------- [Rewrite] 区块渲染（978 新语法） ---------- */
+
+/** 表单小控件：单行文本 */
+function fieldText(label, field, value, ph) {
+  return `<div class="field"><label>${escapeHtml(label)}</label><input type="text" data-field="${field}" value="${escapeHtml(value || '')}" placeholder="${escapeHtml(
+    ph || ''
+  )}" /></div>`;
+}
+
+/** 表单小控件：下拉 */
+function fieldSelect(label, field, options, selected) {
+  return `<div class="field"><label>${escapeHtml(label)}</label><select data-field="${field}">${optionsHtml(options, selected)}</select></div>`;
+}
+
+/** 表单小控件：复选框 */
+function fieldBool(label, field, checked) {
+  return `<label class="field is-checkbox"><input type="checkbox" data-field="${field}"${checked ? ' checked' : ''} /><span>${escapeHtml(label)}</span></label>`;
+}
+
+/** 表单小控件：正则 + i/m/s flags */
+function fieldRegex(label, field, value, flags) {
+  const active = String(flags || '');
+  return `<div class="field"><label>${escapeHtml(label)}</label><div class="composite-input">
+      <span class="input-affix">/</span>
+      <input type="text" data-field="${field}" value="${escapeHtml(value || '')}" placeholder="正则" />
+      <span class="input-affix">/</span>
+      <div class="flag-group" role="group" aria-label="正则 flags">${['i', 'm', 's']
+        .map(
+          (f) =>
+            `<button type="button" class="btn btn-xs${active.includes(f) ? ' is-active' : ''}" data-act="toggle-flag" data-flag="${f}">${f}</button>`
+        )
+        .join('')}</div>
+    </div></div>`;
+}
+
+/** Action 字段的中文名与占位提示 */
+const ACTION_FIELD_UI = {
+  name: { label: 'Header 名称', ph: 'X-Loon' },
+  value: { label: 'Header 值', ph: '支持 ${...}' },
+  location: { label: '重定向地址', ph: 'https://new.example.com' },
+  path: { label: 'JSON Key Path', ph: 'data.vip' },
+  filter: { label: 'jq 表达式', ph: '.data.ads = []' },
+  file: { label: '插件文件', ph: 'response_body.json' },
+  data: { label: 'Body 内容', ph: '{"code":0}' },
+  status: { label: '响应状态码', ph: '200' },
+  body: { label: '响应文本', ph: '可选' },
+  raw: { label: '使用反引号原始字符串', type: 'bool' },
+  base64: { label: '数据为 Base64', type: 'bool' }
+};
+
+/** JSON Action 的值类型 */
+const JSON_VALUE_TYPES = [
+  { v: 'string', label: '字符串' },
+  { v: 'number', label: '数字' },
+  { v: 'boolean', label: '布尔值' },
+  { v: 'null', label: 'null' },
+  { v: 'variable', label: '插件参数' }
+];
+
+/** 渲染 Action 的单个字段（按官方生成器的字段顺序） */
+function renderActionField(type, key, g) {
+  const meta = REWRITE_ACTIONS[type] || {};
+  const ui = ACTION_FIELD_UI[key] || { label: key };
+
+  if (key === 'source') {
+    return fieldSelect('数据来源', 'f-source', type.endsWith('.json.jq') ? JQ_SOURCES : MOCK_SOURCES, g.source);
+  }
+  /* 数据来源决定显示「内容输入」还是「文件路径」 */
+  if (key === 'filter' && g.source !== 'filter') return '';
+  if (key === 'file' && g.source !== 'file') return '';
+  if (key === 'data' && g.source !== 'data') return '';
+  if (key === 'type') return fieldSelect('Body 类型', 'f-type', MOCK_TYPES, g.type);
+  if (key === 'mode') return fieldSelect('响应类型', 'f-mode', REJECT_MODES, g.mode);
+  if (key === 'body') return g.mode === 'custom' ? fieldText(ui.label, 'f-body', g.body, ui.ph) : '';
+  if (key === 'status') return fieldText(type === 'redirect' ? '状态码' : ui.label, 'f-status', g.status, ui.ph);
+  if (key === 'pattern') return fieldRegex('正则', 'f-pattern', g.pattern, g.flags);
+  if (key === 'raw' || key === 'base64') return fieldBool(ui.label, `f-${key}`, Boolean(g[key]));
+  if (key === 'value' && meta.jsonValue) {
+    return `${fieldSelect('值类型', 'f-valueType', JSON_VALUE_TYPES, g.valueType || 'string')}
+      ${fieldText('值', 'f-value', g.value, g.valueType === 'variable' ? '变量名' : 'true')}`;
+  }
+  if (key === 'replacement') {
+    return fieldText(type === 'url.replace' ? '替换 URL（使用 IF 正则）' : '替换内容', 'f-replacement', g.replacement, '支持 ${...}');
+  }
+  return fieldText(ui.label, `f-${key}`, g[key], ui.ph);
+}
+
+/** 渲染 Action 的一组参数 */
+function renderActionFields(type, g) {
+  const meta = REWRITE_ACTIONS[type];
+  if (!meta) return '';
+  return (meta.fields || []).map((key) => renderActionField(type, key, g)).join('');
+}
+
+/** Action 下拉：按阶段过滤，并按官方分组 */
+function rewriteActionOptions(phase, selected) {
+  return REWRITE_ACTION_GROUPS.map((group) => {
+    const items = group.actions.filter((v) => REWRITE_ACTIONS[v] && REWRITE_ACTIONS[v].phase === phase);
+    if (!items.length) return '';
+    return `<optgroup label="${escapeHtml(group.label)}">${optionsHtml(
+      items.map((v) => ({ v, label: REWRITE_ACTIONS[v].label })),
+      selected
+    )}</optgroup>`;
+  }).join('');
+}
+
+/** 渲染一个 Action 卡片（含参数组） */
+function renderRewriteActionCard(block, idx, action, aidx, phase) {
+  const meta = REWRITE_ACTIONS[action.type] || REWRITE_ACTIONS['request.header.set'];
+  const groups = action.groups && action.groups.length ? action.groups : [meta.defaults];
+  return `
+    <div class="action-card" data-aidx="${aidx}">
+      <div class="action-head">
+        <div class="field">
+          <label>Action</label>
+          <select data-field="action-type">${rewriteActionOptions(phase, action.type)}</select>
+        </div>
+        <code class="action-sig">${escapeHtml(rewriteActionName(action.type, groups[0]))}</code>
+        <div class="row-actions">
+          <button class="btn-icon is-danger" type="button" data-act="del-action" data-id="${block.id}" data-idx="${idx}" data-aidx="${aidx}" title="删除 Action" aria-label="删除 Action">${ICONS.trash}</button>
+        </div>
+      </div>
+      ${groups
+        .map(
+          (g, gi) => `
+        <div class="param-group" data-gidx="${gi}">
+          <div class="param-group-head">
+            <strong>参数组 ${gi + 1}</strong>
+            ${
+              groups.length > 1
+                ? `<button class="btn-icon is-danger" type="button" data-act="del-param" data-id="${block.id}" data-idx="${idx}" data-aidx="${aidx}" data-gidx="${gi}" title="删除参数组" aria-label="删除参数组">${ICONS.trash}</button>`
+                : ''
+            }
+          </div>
+          <div class="param-fields">${renderActionFields(action.type, g)}</div>
+        </div>`
+        )
+        .join('')}
+      ${
+        meta.batch
+          ? `<div class="action-foot">
+        <button class="btn btn-xs add-row" type="button" data-act="add-param" data-id="${block.id}" data-idx="${idx}" data-aidx="${aidx}">＋ 添加一组参数</button>
+        ${groups.length > 1 ? '<span class="value-hint">多组参数会生成数组批量语法。</span>' : ''}
+      </div>`
+          : ''
+      }
+    </div>`;
+}
+
+/** 渲染单个条件 */
+function renderRewriteCond(block, idx, cond, path, phase) {
+  const fields = REWRITE_FIELDS.filter((f) => f.phases.includes(phase));
+  const fieldMeta = REWRITE_FIELDS.find((f) => f.v === cond.field) || fields[0];
+  const isRegex = cond.operator === '~=';
+  const valueTypes = REWRITE_VALUE_TYPES.filter((t) => t.ops.includes(cond.operator));
+  const valueType = valueTypes.some((t) => t.v === cond.valueType) ? cond.valueType : valueTypes[0].v;
+  const showRegex = isRegex && valueType === 'regex';
+  const valueLabel = valueType === 'regex' ? '正则内容' : valueType === 'variable' ? '参数名' : '比较值';
+  return `
+    <div class="row is-cond" data-path="${path}">
+      <div class="field">
+        <label>字段</label>
+        <select data-field="cond-field">${optionsHtml(fields, cond.field)}</select>
+      </div>
+      ${
+        fieldMeta.header
+          ? `<div class="field"><label>Header 名称</label><input type="text" data-field="cond-header-name" value="${escapeHtml(
+              cond.headerName || ''
+            )}" placeholder="Content-Type" /></div>`
+          : ''
+      }
+      ${
+        fieldMeta.variable
+          ? `<div class="field"><label>参数名</label><input type="text" data-field="cond-var-name" value="${escapeHtml(
+              cond.variableName || ''
+            )}" placeholder="token" /></div>`
+          : ''
+      }
+      <div class="field">
+        <label>操作符</label>
+        <select data-field="cond-op">${optionsHtml(REWRITE_OPS, cond.operator)}</select>
+      </div>
+      <div class="field">
+        <label>${isRegex ? '匹配值' : '值类型'}</label>
+        <select data-field="cond-vtype">${optionsHtml(valueTypes, valueType)}</select>
+      </div>
+      <div class="field grow">
+        <label>${valueLabel}</label>
+        ${
+          showRegex
+            ? `<div class="composite-input">
+          <span class="input-affix">/</span>
+          <input type="text" data-field="cond-value" value="${escapeHtml(cond.value || '')}" placeholder="^https:\\/\\/example\\.com" />
+          <span class="input-affix">/</span>
+          <div class="flag-group" role="group" aria-label="正则 flags">${['i', 'm', 's']
+            .map(
+              (f) =>
+                `<button type="button" class="btn btn-xs${String(cond.flags || '').includes(f) ? ' is-active' : ''}" data-act="toggle-flag" data-flag="${f}">${f}</button>`
+            )
+            .join('')}</div>
+        </div>`
+            : `<input type="text" data-field="cond-value" value="${escapeHtml(cond.value || '')}" placeholder="${
+                valueType === 'variable' ? 'urlPattern' : '输入比较值'
+              }" />`
+        }
+      </div>
+      ${
+        isRegex
+          ? `<div class="field"><label>捕获 as（可选）</label><input type="text" data-field="cond-capture" value="${escapeHtml(
+              cond.captureName || ''
+            )}" placeholder="item" /></div>`
+          : ''
+      }
+      <div class="row-actions">
+        <button class="btn-icon is-danger" type="button" data-act="del-cond" data-id="${block.id}" data-idx="${idx}" data-path="${path}" title="删除条件" aria-label="删除条件">${ICONS.trash}</button>
+      </div>
+    </div>`;
+}
+
+/** 渲染条件组（可嵌套） */
+function renderRewriteGroup(block, idx, group, path, depth, phase) {
+  const items = (group && group.items) || [];
+  const logic = group.logic === '||' ? '||' : '&&';
+  const childPath = (i) => (path ? `${path}.${i}` : String(i));
+  return `
+    <div class="cond-group" data-depth="${depth}">
+      <div class="cond-group-head">
+        <span class="cond-group-title">${
+          items.length > 1 ? (logic === '||' ? '满足以下任一条件' : '满足以下全部条件') : '条件'
+        }</span>
+        <div class="logic-toggle" role="group" aria-label="条件关系">
+          <button type="button" class="btn btn-xs${logic === '&&' ? ' is-active' : ''}" data-act="set-logic" data-id="${block.id}" data-idx="${idx}" data-path="${path}" data-logic="&&">AND</button>
+          <button type="button" class="btn btn-xs${logic === '||' ? ' is-active' : ''}" data-act="set-logic" data-id="${block.id}" data-idx="${idx}" data-path="${path}" data-logic="||">OR</button>
+        </div>
+        ${
+          depth > 0
+            ? `<button class="btn-icon is-danger" type="button" data-act="del-cond" data-id="${block.id}" data-idx="${idx}" data-path="${path}" title="删除条件组" aria-label="删除条件组">${ICONS.trash}</button>`
+            : ''
+        }
+      </div>
+      ${items
+        .map((child, i) =>
+          child.kind === 'group'
+            ? renderRewriteGroup(block, idx, child, childPath(i), depth + 1, phase)
+            : renderRewriteCond(block, idx, child, childPath(i), phase)
+        )
+        .join('')}
+      <div class="cond-group-actions">
+        <button class="btn btn-xs add-row" type="button" data-act="add-cond" data-id="${block.id}" data-idx="${idx}" data-path="${path}">＋ 条件</button>
+        <button class="btn btn-xs add-row" type="button" data-act="add-cond-group" data-id="${block.id}" data-idx="${idx}" data-path="${path}">＋ 条件组</button>
+      </div>
+    </div>`;
+}
+
+/** 渲染一条复写：阶段 + 条件树 + Action 列表 */
+function renderRewriteItem(block, item, idx) {
+  const phase = item.phase === 'response' ? 'response' : 'request';
+  const actions = item.actions || [];
+  return `
+    <div class="rewrite-item" data-idx="${idx}">
+      <div class="rewrite-head">
+        <div class="field">
+          <label>阶段</label>
+          <select data-field="phase">${optionsHtml(REWRITE_PHASES, phase)}</select>
+        </div>
+        <div class="row-actions">
+          <button class="btn-icon is-danger" type="button" data-act="del-rewrite" data-idx="${idx}" title="删除复写" aria-label="删除复写">${ICONS.trash}</button>
+        </div>
+      </div>
+      <div class="rewrite-section">
+        <div class="rewrite-section-title"><span class="step-no">01</span> IF · 匹配条件</div>
+        ${renderRewriteGroup(block, idx, item.conditions, '', 0, phase)}
+      </div>
+      <div class="rewrite-section">
+        <div class="rewrite-section-title"><span class="step-no">02</span> THEN · 执行动作</div>
+        <div class="action-list">
+          ${actions.map((action, aidx) => renderRewriteActionCard(block, idx, action, aidx, phase)).join('')}
+        </div>
+        <button class="btn btn-sm add-row" type="button" data-act="add-action" data-id="${block.id}" data-idx="${idx}">＋ 添加 Action</button>
+      </div>
+    </div>`;
+}
+
+/** [Rewrite]（978 新语法）：条件树 + Action 列表，支持载入官方示例 */
 function renderRewrite(block) {
   const list = block.data.list || [];
   return `
     <div class="rows">
-      ${list
-        .map((item, idx) => {
-          const phase = item.phase === 'response' ? 'response' : 'request';
-          const compatible = REWRITE_ACTIONS.filter((a) => a.phase === 'both' || a.phase === phase);
-          const actions = item.actions || [];
-          return `
-        <div class="rewrite-item" data-idx="${idx}">
-          <div class="row is-rewrite">
-            <div class="field">
-              <label>阶段</label>
-              <select data-field="phase">${optionsHtml(REWRITE_PHASES, phase)}</select>
-            </div>
-            <div class="field grow">
-              <label>URL 匹配正则</label>
-              <input type="text" data-field="cond" value="${escapeHtml(item.cond || '')}" placeholder="^https?:\\/\\/api\\.example\\.com" />
-            </div>
-            <div class="field">
-              <label>捕获名 as（可选）</label>
-              <input type="text" data-field="capture" value="${escapeHtml(item.capture || '')}" placeholder="item" />
-            </div>
-            <div class="row-actions">
-              <button class="btn-icon is-danger" type="button" data-act="del-rewrite" data-idx="${idx}" title="删除复写" aria-label="删除复写">${ICONS.trash}</button>
-            </div>
-          </div>
-          <div class="action-list">
-            ${actions
-              .map((action, aidx) => {
-                const meta = REWRITE_ACTIONS.find((a) => a.v === action.v);
-                const opts = compatible.some((a) => a.v === action.v)
-                  ? compatible
-                  : [{ v: action.v, label: `${action.v} · 阶段不符` }, ...compatible];
-                return `
-              <div class="row is-action" data-aidx="${aidx}">
-                <div class="field">
-                  <label>Action</label>
-                  <select data-field="action-v">${optionsHtml(opts, action.v)}</select>
-                </div>
-                ${((meta && meta.args) || [])
-                  .map(
-                    (arg, gidx) => `
-                <div class="field">
-                  <label>${escapeHtml(arg.n)}${arg.opt ? '（可选）' : ''}</label>
-                  <input type="text" data-field="action-arg" data-argidx="${gidx}" value="${escapeHtml((action.args || [])[gidx] || '')}" placeholder="${escapeHtml(arg.ph || '')}" />
-                </div>`
-                  )
-                  .join('')}
-                <div class="row-actions">
-                  <button class="btn-icon is-danger" type="button" data-act="del-action" data-idx="${idx}" data-aidx="${aidx}" title="删除 Action" aria-label="删除 Action">${ICONS.trash}</button>
-                </div>
-              </div>`;
-              })
-              .join('')}
-            <button class="btn btn-sm add-row" type="button" data-act="add-action" data-idx="${idx}">＋ 添加 Action</button>
-          </div>
-        </div>`;
-        })
-        .join('')}
+      ${list.map((item, idx) => renderRewriteItem(block, item, idx)).join('')}
     </div>
-    <button class="btn btn-sm add-row" type="button" data-act="add-rewrite" data-id="${block.id}">＋ 添加复写</button>
-    <div class="note-box">输出形如 <code>request if \${url} ~= /正则/ as item then Action(参数) | Action(参数)</code>。字符串参数自动加引号，正则参数包进 /…/；<code>url.replace</code> / <code>redirect</code> 替换 URL 正则命中的部分，可用 <code>\${捕获名.1}</code> 引用捕获。含响应 Mock 的复写只能搭配 <code>response.header.*</code>。</div>`;
+    <div class="rewrite-foot">
+      <button class="btn btn-sm add-row" type="button" data-act="add-rewrite" data-id="${block.id}">＋ 添加复写</button>
+      <label class="mini-field">
+        <span>载入官方示例</span>
+        <select data-act="load-rewrite-preset" data-id="${block.id}">
+          <option value="">选择示例…</option>
+          ${REWRITE_PRESET_KEYS.map((p) => `<option value="${p.v}">${escapeHtml(p.label)}</option>`).join('')}
+        </select>
+      </label>
+    </div>
+    <div class="note-box">输出形如 <code>request if \${url} ~= /正则/ &amp;&amp; \${request.method} == "POST" then request.header.set("X-Loon", "true")</code>。条件支持 AND / OR 嵌套分组；用 <code>as 捕获名</code> 保存匹配结果后可用 <code>\${捕获名.1}</code> 引用。同一 Action 填多组参数会自动生成数组批量语法。含 Response Mock 的复写只能搭配响应 Header Action。</div>`;
 }
-
 /** [Script]（983 新语法）：kind [if 条件] then script(path[, argument]) [with ...] */
 function renderScript(block) {
   const d = block.data;
@@ -1960,7 +2756,8 @@ function onCanvasClick(event) {
     return;
   }
 
-  if (action === 'add-cond') {
+  /* 旧规则树的条件增删（仅 [Rule] 区块）；[Rewrite] 的同名操作带 data-idx，走下方新分支 */
+  if (action === 'add-cond' && block.type === 'rules') {
     const path = btn.dataset.path || 'root';
     const target = resolveCondition(block.data.root, path);
     if (!target) return;
@@ -1970,7 +2767,7 @@ function onCanvasClick(event) {
     return;
   }
 
-  if (action === 'del-cond') {
+  if (action === 'del-cond' && block.type === 'rules') {
     removeConditionAt(block.data.root, btn.dataset.path);
     afterStructureChange();
     return;
@@ -2000,14 +2797,9 @@ function onCanvasClick(event) {
     return;
   }
 
+  /* ---------- [Rewrite]：条件树 + Action 列表 ---------- */
   if (action === 'add-rewrite') {
-    const phase = 'request';
-    (block.data.list = block.data.list || []).push({
-      phase,
-      cond: '',
-      capture: '',
-      actions: [{ v: 'request.header.add', args: ['', ''] }]
-    });
+    (block.data.list = block.data.list || []).push(rewritePreset('request'));
     afterStructureChange();
     return;
   }
@@ -2018,13 +2810,73 @@ function onCanvasClick(event) {
     return;
   }
 
+  if (action === 'add-cond' || action === 'add-cond-group') {
+    const item = block.data.list[Number(btn.dataset.idx)];
+    if (!item) return;
+    const parent = resolveRewriteNode(item.conditions, btn.dataset.path || '');
+    if (!parent || !Array.isArray(parent.items)) return;
+    parent.items.push(
+      action === 'add-cond-group' ? { kind: 'group', logic: '&&', items: [newCondition()] } : newCondition()
+    );
+    afterStructureChange();
+    return;
+  }
+
+  if (action === 'del-cond') {
+    const item = block.data.list[Number(btn.dataset.idx)];
+    if (!item) return;
+    removeRewriteNode(item.conditions, btn.dataset.path || '');
+    afterStructureChange();
+    return;
+  }
+
+  if (action === 'set-logic') {
+    const item = block.data.list[Number(btn.dataset.idx)];
+    if (!item) return;
+    const group = resolveRewriteNode(item.conditions, btn.dataset.path || '');
+    if (!group) return;
+    group.logic = btn.dataset.logic === '||' ? '||' : '&&';
+    afterStructureChange();
+    return;
+  }
+
+  /* 正则 flags：条件行的 flags 与 Action 参数组的 flags 用同一个按钮 */
+  if (action === 'toggle-flag') {
+    const flag = btn.dataset.flag || '';
+    if (flag.length !== 1 || !'ims'.includes(flag)) return;
+    const toggle = (holder) => {
+      const current = String(holder.flags || '');
+      holder.flags = current.includes(flag) ? current.split('').filter((f) => f !== flag).join('') : current + flag;
+    };
+    const condRow = btn.closest('.row.is-cond');
+    const wrap = btn.closest('.rewrite-item');
+    if (condRow && wrap) {
+      const item = block.data.list[Number(wrap.dataset.idx)];
+      const cond = item ? resolveRewriteNode(item.conditions, condRow.dataset.path || '') : null;
+      if (!cond) return;
+      toggle(cond);
+      afterStructureChange();
+      return;
+    }
+    const paramGroup = btn.closest('.param-group');
+    const actionCard = btn.closest('.action-card');
+    if (paramGroup && actionCard && wrap) {
+      const item = block.data.list[Number(wrap.dataset.idx)];
+      const act = item ? item.actions[Number(actionCard.dataset.aidx)] : null;
+      const g = act && act.groups ? act.groups[Number(paramGroup.dataset.gidx)] : null;
+      if (!g) return;
+      toggle(g);
+      afterStructureChange();
+      return;
+    }
+    return;
+  }
+
   if (action === 'add-action') {
     const item = block.data.list[Number(btn.dataset.idx)];
     if (!item) return;
-    /* 新 Action 默认选 header.add（与所在阶段匹配），参数位按方法签名补空 */
-    const preferred = REWRITE_ACTIONS.find((a) => a.v === (item.phase === 'response' ? 'response.header.add' : 'request.header.add'));
-    const meta = preferred || REWRITE_ACTIONS.find((a) => a.phase === 'both' || a.phase === (item.phase || 'request'));
-    item.actions.push({ v: meta.v, args: meta.args.map(() => '') });
+    item.actions = item.actions || [];
+    item.actions.push(newAction(item.phase === 'response' ? 'response.header.set' : 'request.header.set'));
     afterStructureChange();
     return;
   }
@@ -2036,6 +2888,68 @@ function onCanvasClick(event) {
     afterStructureChange();
     return;
   }
+
+  if (action === 'add-param') {
+    const item = block.data.list[Number(btn.dataset.idx)];
+    if (!item) return;
+    const act = item.actions[Number(btn.dataset.aidx)];
+    if (!act || !REWRITE_ACTIONS[act.type]) return;
+    act.groups = act.groups && act.groups.length ? act.groups : [Object.assign({}, REWRITE_ACTIONS[act.type].defaults)];
+    act.groups.push(Object.assign({}, REWRITE_ACTIONS[act.type].defaults));
+    afterStructureChange();
+    return;
+  }
+
+  if (action === 'del-param') {
+    const item = block.data.list[Number(btn.dataset.idx)];
+    if (!item) return;
+    const act = item.actions[Number(btn.dataset.aidx)];
+    if (!act || !act.groups) return;
+    act.groups.splice(Number(btn.dataset.gidx), 1);
+    afterStructureChange();
+    return;
+  }
+}
+
+/* ---------- [Rewrite] 条件树工具 ---------- */
+
+/** 按路径取条件树里的节点（path 为空表示根组） */
+function resolveRewriteNode(group, path) {
+  if (!group) return null;
+  if (!path) return group;
+  let current = group;
+  for (const index of String(path).split('.').filter(Boolean).map(Number)) {
+    const list = current.items || [];
+    current = list[index];
+    if (!current) return null;
+  }
+  return current;
+}
+
+/** 删除条件树里某个路径上的节点 */
+function removeRewriteNode(group, path) {
+  const segments = String(path).split('.').filter(Boolean).map(Number);
+  if (!segments.length) return;
+  let parent = group;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    parent = (parent.items || [])[segments[i]];
+    if (!parent) return;
+  }
+  (parent.items || []).splice(segments[segments.length - 1], 1);
+}
+
+/** 切换阶段后，把不适用于新阶段的条件字段重置为默认 URL 条件 */
+function stripPhaseFields(group, phase) {
+  if (!group) return group;
+  (group.items || []).forEach((child, i) => {
+    if (child.kind === 'group') {
+      stripPhaseFields(child, phase);
+      return;
+    }
+    const meta = REWRITE_FIELDS.find((f) => f.v === child.field);
+    if (meta && meta.phases.indexOf(phase) === -1) group.items[i] = newCondition();
+  });
+  return group;
 }
 
 function ensureConditionList(node) {
@@ -2054,6 +2968,22 @@ function afterStructureChange() {
 
 /* ---------- 画布字段输入 ---------- */
 function onCanvasField(event) {
+  /* 「载入官方示例」这类下拉用 data-act 标记，不走字段写入逻辑 */
+  const presetSelect = event.target.closest('[data-act="load-rewrite-preset"]');
+  if (presetSelect) {
+    const key = presetSelect.value;
+    presetSelect.value = '';
+    const block = getBlock(presetSelect.dataset.id);
+    if (!block || !key) return;
+    const preset = rewritePreset(key);
+    if (!preset) return;
+    block.data.list = block.data.list || [];
+    block.data.list.push(preset);
+    toast(`已载入官方示例「${preset.label}」`, 'success');
+    afterStructureChange();
+    return;
+  }
+
   const input = event.target.closest('[data-field]');
   if (!input) return;
   const card = input.closest('.card');
@@ -2139,37 +3069,95 @@ function onCanvasField(event) {
     return;
   }
 
-  /* ---------- [Rewrite]：嵌套的 Action 列表 ---------- */
+  /* ---------- [Rewrite]：条件树 + Action 参数组 ---------- */
   if (block.type === 'rewrite') {
-    const row = input.closest('[data-idx]');
-    const item = block.data.list[Number(row ? row.dataset.idx : -1)];
+    const wrap = input.closest('.rewrite-item');
+    const item = wrap ? block.data.list[Number(wrap.dataset.idx)] : null;
     if (!item) return;
-    if (field === 'phase') {
-      item.phase = value;
+
+    /* 阶段切换：丢掉不属于新阶段的 Action，条件字段也一并降级（与官方生成器一致） */
+    if (field === 'phase' && value !== item.phase) {
+      const next = value === 'response' ? 'response' : 'request';
+      item.phase = next;
+      const kept = (item.actions || []).filter((a) => REWRITE_ACTIONS[a.type] && REWRITE_ACTIONS[a.type].phase === next);
+      item.actions = kept.length ? kept : [newAction(next === 'response' ? 'response.header.set' : 'request.header.set')];
+      stripPhaseFields(item.conditions, next);
       afterStructureChange();
       return;
     }
-    if (field === 'action-v') {
-      const arow = input.closest('[data-aidx]');
-      const act = item.actions[Number(arow ? arow.dataset.aidx : -1)];
-      if (!act) return;
-      const meta = REWRITE_ACTIONS.find((a) => a.v === value);
-      if (!meta) return;
-      act.v = value;
-      /* 参数位数量随新 Action 的方法签名变化，已有的输入尽量保留 */
-      act.args = meta.args.map((_, i) => act.args[i] || '');
-      afterStructureChange();
-      return;
-    }
-    if (field === 'action-arg') {
-      const arow = input.closest('[data-aidx]');
-      const act = item.actions[Number(arow ? arow.dataset.aidx : -1)];
-      if (!act) return;
-      act.args[Number(input.dataset.argidx)] = value;
+
+    /* 条件行字段 */
+    if (field.indexOf('cond-') === 0) {
+      const condRow = input.closest('.row.is-cond');
+      const cond = condRow ? resolveRewriteNode(item.conditions, condRow.dataset.path || '') : null;
+      if (!cond || cond.kind === 'group') return;
+      if (field === 'cond-field') {
+        cond.field = value;
+        afterStructureChange();
+        return;
+      }
+      if (field === 'cond-op') {
+        cond.operator = value === '==' ? '==' : '~=';
+        /* 操作符决定可用的值类型集合，切换后给一个合理默认值 */
+        const types = REWRITE_VALUE_TYPES.filter((t) => t.ops.indexOf(cond.operator) !== -1);
+        if (!types.some((t) => t.v === cond.valueType)) {
+          cond.valueType = cond.operator === '~=' ? 'regex' : 'string';
+          cond.value = cond.operator === '~=' ? '^https:\\/\\/example\\.com' : '';
+        }
+        afterStructureChange();
+        return;
+      }
+      if (field === 'cond-vtype') {
+        cond.valueType = value;
+        if (value === 'regex' && !String(cond.value || '').trim()) cond.value = '^https:\\/\\/example\\.com';
+        afterStructureChange();
+        return;
+      }
+      if (field === 'cond-value') cond.value = value;
+      else if (field === 'cond-header-name') cond.headerName = value;
+      else if (field === 'cond-var-name') cond.variableName = value;
+      else if (field === 'cond-capture') cond.captureName = value;
       renderPreview();
       scheduleSave();
       return;
     }
+
+    /* Action 类型切换：按官方默认值重置参数组 */
+    if (field === 'action-type') {
+      const card = input.closest('.action-card');
+      const act = card ? item.actions[Number(card.dataset.aidx)] : null;
+      if (!act || !REWRITE_ACTIONS[value]) return;
+      act.type = value;
+      act.groups = [Object.assign({}, REWRITE_ACTIONS[value].defaults)];
+      afterStructureChange();
+      return;
+    }
+
+    /* Action 参数组里的字段（data-field="f-xxx"） */
+    if (field.indexOf('f-') === 0) {
+      const card = input.closest('.action-card');
+      const groupRow = input.closest('.param-group');
+      const act = card ? item.actions[Number(card.dataset.aidx)] : null;
+      const g = act && groupRow && act.groups ? act.groups[Number(groupRow.dataset.gidx)] : null;
+      if (!g) return;
+      const key = field.slice(2);
+      if (key === 'raw' || key === 'base64') {
+        g[key] = input.checked;
+        afterStructureChange();
+        return;
+      }
+      /* 数据来源 / 响应类型 / 值类型会改变表单结构，重绘 */
+      if (key === 'source' || key === 'mode' || key === 'valueType') {
+        g[key] = value;
+        afterStructureChange();
+        return;
+      }
+      g[key] = value;
+      renderPreview();
+      scheduleSave();
+      return;
+    }
+
     item[field] = value;
     renderPreview();
     scheduleSave();

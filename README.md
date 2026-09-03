@@ -128,19 +128,24 @@ NOT,((DOMAIN-SUFFIX,example.com)),DIRECT
 
 每行：`<request|response> if <条件> then <Action>(参数)[ | <Action>(参数) ...]`
 
-- 条件用 `${url} ~= /正则/`（`~=` 是查找匹配，完整匹配要显式写 `^` `$`），条件后可用 `as 名字` 保存捕获，Action 里用 `${名字.1}` 引用
+- 条件用 `${url} ~= /正则/`（`~=` 是查找匹配，完整匹配要显式写 `^` `$`），正则后可加 flags（`/…/i`、`/…/ig` 等）
+- 字段可选 `${url}` / `${request.method}` / `${request.header['名称']}` / `${response.status}` / `${response.header['名称']}` / 插件参数 `${参数名}`；操作符支持 `==`、`!=`、`~=`
+- 条件支持 `&&` / `||`，`||` 子组会自动加括号；条件后可用 `as 名字` 保存捕获，Action 里用 `${名字.1}` 引用
 - 字符串参数加双引号，正则参数写 `/…/`，数字 / 布尔 / 变量原样；多个 Action 用 `|` 连接，从左到右执行
+- 同一 Action 填多组参数会生成**数组批量语法**，如 `request.header.set(["A", "B"], ["1", "2"])`
 
 ```text
 [Rewrite]
-request if ${url} ~= /^https?:\/\/(www\.)?example\.cn\/path/ then url.replace("https://example.com/path")
-response if ${url} ~= /^https?:\/\/api\.example\.com\/profile$/ && ${response.status} == 200 then response.json.replace("data.vip", true)
-request if ${url} ~= /^https:\/\/example\.com\/ads/ then reject_dict(200)
+request if ${url} ~= /^https:\/\/api\.example\.com/ && ${request.method} == "POST" then request.header.set("X-Loon", "true") | request.header.del("Cookie")
+response if ${url} ~= /^https:\/\/api\.example\.com\/profile$/ && ${response.status} == 200 && ${response.header['Content-Type']} ~= /^application\/json(?:;|$)/i then response.json.replace("data.vip", true) | response.header.set("X-Rewritten", "true")
+request if (${url} ~= /ads/ || ${url} ~= /tracker/) && ${request.method} != "GET" then reject_dict(200)
 ```
 
 常用 Action：`url.replace(内容)`、`redirect(302|307, 目标)`、`reject(状态码[, 响应体])`、`reject_img / reject_dict / reject_array / reject_video(状态码)`、`request|response.header.add/set/del/replace`、`request|response.body.replace(正则, 替换)`、`request|response.json.add/delete/replace/jq/jq_file`、`request|response.body.mock/mock_file`。
 
-包含 `response.body.mock(_file)` 的复写只能再搭配 `response.header.*`，且一条复写最多一个 Mock。
+包含 `response.body.mock(_file)` 的复写只能再搭配 `response.header.*`，且一条复写最多一个 Mock；`reject` 系列属于请求阶段 Action。
+
+工作台的复写区块与官方生成器 <https://nsloon.app/rewrite-builder> 对齐：条件树支持嵌套分组与 AND/OR 切换、正则 flags、捕获引用、批量数组参数，并内置了「请求 Header 清理 / 修改 JSON 响应 / Mock JSON 响应」三个官方示例可一键载入。
 
 ### `[Host]`
 

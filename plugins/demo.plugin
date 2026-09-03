@@ -17,8 +17,8 @@ DOMAIN-SUFFIX,example.com,DIRECT
 AND,((DOMAIN-KEYWORD,ads),(USER-AGENT,*AdBot*)),REJECT
 
 [Rewrite]
-request if ${url} ~= /^https?:\/\/(www\.)?example\.cn\/path/ then url.replace("https://example.com/path")
-response if ${url} ~= /^https?:\/\/ads\.example\.com/ then reject_dict(200)
+request if ${url} ~= /^https:\/\/api\.example\.com/ && ${request.method} == "POST" then request.header.set("X-Loon", "true") | request.header.del("Cookie")
+response if ${url} ~= /^https:\/\/api\.example\.com\/profile$/ && ${response.status} == 200 && ${response.header['Content-Type']} ~= /^application\/json(?:;|$)/i then response.json.replace("data.vip", true) | response.header.set("X-Rewritten", "true")
 
 [Host]
 example.com = server:223.5.5.5
