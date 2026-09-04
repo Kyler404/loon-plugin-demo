@@ -18,7 +18,7 @@ dns-server =
 [Rule]
 
 [Rewrite]
-response if ${url} ~= /^https:\/\/api\.example\.com/ && ${request.method} == "POST" then response.body.replace(/"enabled":\s*false/, "\"enabled\":true")
+^http:\/\/app2025\.xuanyou168\.com:8099\/user\/getUserData response-body-replace-regex /"vipState":\s*0/ "\"vipState\":1"
 
 [Host]
 
