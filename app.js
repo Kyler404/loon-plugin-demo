@@ -113,6 +113,13 @@ const REWRITE_OPS = [
   { v: '~=', label: '正则匹配 ~=' }
 ];
 
+/** URL 构建器的协议选项：any → https?（同时匹配 http / https） */
+const URL_SCHEMES = [
+  { v: 'https', label: 'https' },
+  { v: 'http', label: 'http' },
+  { v: 'any', label: 'http(s)' }
+];
+
 /** 比较值类型：ops 限定可用操作符；regex 只用于正则匹配 */
 const REWRITE_VALUE_TYPES = [
   { v: 'regex', label: '正则', ops: ['~='] },
@@ -317,12 +324,138 @@ function rewritePreset(kind) {
   return presets[kind];
 }
 
+/** 新建一条空白复写：只含 IF（空条件树）+ THEN（空 Action 列表）。
+ *  复写区块固定为单条结构，不再支持「添加复写」「载入官方示例」。 */
+function emptyRewriteItem() {
+  return {
+    phase: 'request',
+    conditions: { logic: '&&', items: [] },
+    actions: []
+  };
+}
+
+/** 递归统计条件树中的叶子条件数（用于头部摘要展示） */
+function countRewriteConds(node) {
+  if (!node || !Array.isArray(node.items)) return 0;
+  return node.items.reduce((sum, child) => sum + (child && child.kind === 'group' ? countRewriteConds(child) : 1), 0);
+}
+
 /** 新建条件时的默认值（照抄官方生成器） */
 function newCondition(overrides) {
   return Object.assign(
     { kind: 'condition', field: 'url', operator: '~=', valueType: 'regex', value: '^https:\\/\\/example\\.com', flags: '', headerName: '', variableName: '', captureName: '' },
     overrides
   );
+}
+
+/** URL 构建器的默认部件 */
+function defaultUrlParts() {
+  return { scheme: 'https', host: 'example.com', port: '', path: '', query: '', exact: false };
+}
+
+/** 已转义的字符保持不动，未转义的补上反斜杠（避免把 \. \/ 二次转义成 \\. \\/） */
+function escapeRegexChar(text, ch) {
+  return String(text).replace(new RegExp(`\\\\?\\${ch}`, 'g'), (m) => (m.length === 2 ? m : `\\${ch}`));
+}
+
+/** 把 URL 部件拼成正则源（不含 / 分隔符与 flags；输出时再经 wrapRegex 兜底） */
+function buildUrlRegex(parts) {
+  const p = parts || {};
+  const scheme = p.scheme === 'http' ? 'http' : p.scheme === 'any' ? 'https?' : 'https';
+  const host = escapeRegexChar(String(p.host || '').trim(), '.');
+  let src = `^${scheme}:\\/\\/${host}`;
+  const port = String(p.port || '').trim();
+  if (port) src += `:${port}`;
+  const path = escapeRegexChar(String(p.path || '').trim().replace(/^\/+/, ''), '/');
+  if (path) src += `\\/${path}`;
+  const query = escapeRegexChar(String(p.query || '').trim().replace(/^\?+/, ''), '/');
+  if (query) src += `\\?${query}`;
+  if (p.exact) src += '$';
+  return src;
+}
+
+/** 尝试把正则源解析回 URL 部件；无法识别（手写复杂正则）时返回 null，回退到手写输入 */
+function parseUrlRegex(src) {
+  let p = String(src || '').trim();
+  if (!p) return null;
+  /* 用户可能把 /…/ 分隔符也写了进来 */
+  if (p.charAt(0) === '/') {
+    const last = p.lastIndexOf('/');
+    if (last > 0) p = p.slice(1, last);
+  }
+  const exact = p.charAt(p.length - 1) === '$';
+  if (p.charAt(0) === '^') p = p.slice(1);
+  if (exact) p = p.slice(0, -1);
+
+  let scheme;
+  if (p.startsWith('https?')) {
+    scheme = 'any';
+    p = p.slice(6);
+  } else if (p.startsWith('https')) {
+    scheme = 'https';
+    p = p.slice(5);
+  } else if (p.startsWith('http')) {
+    scheme = 'http';
+    p = p.slice(4);
+  } else {
+    return null;
+  }
+  /* :// 分隔符可能已转义成 :\/\/ */
+  if (p.startsWith(':\\/\\/')) p = p.slice(5);
+  else if (p.startsWith('://')) p = p.slice(3);
+  else return null;
+
+  let host = '';
+  let port = '';
+  let path = '';
+  let query = '';
+  let stage = 'host';
+  let i = 0;
+  while (i < p.length) {
+    const c = p[i];
+    const two = p.slice(i, i + 2);
+    const isPathSep = two === '\\/' || c === '/';
+    const isQuerySep = two === '\\?' || c === '?';
+    if (stage === 'host' && c === ':') {
+      stage = 'port';
+      i += 1;
+      continue;
+    }
+    /* 注意：path 阶段内的 \/ 是路径内容（转义斜杠），只有从 host/port 切入时才是分隔符 */
+    if (isPathSep && (stage === 'host' || stage === 'port')) {
+      stage = 'path';
+      i += two === '\\/' ? 2 : 1;
+      continue;
+    }
+    if (isQuerySep && stage !== 'query') {
+      stage = 'query';
+      i += two === '\\?' ? 2 : 1;
+      continue;
+    }
+    if (stage === 'host') host += c;
+    else if (stage === 'port') port += c;
+    else if (stage === 'path') path += c;
+    else query += c;
+    i += 1;
+  }
+  if (!host) return null;
+  return {
+    scheme,
+    host: host.replace(/\\\./g, '.'),
+    port,
+    path: path.replace(/\\\//g, '/'),
+    query: query.replace(/\\\//g, '/'),
+    exact
+  };
+}
+
+/** 取条件的 URL 部件：优先用已存部件，否则尝试从正则值解析；解析失败返回 null */
+function ensureUrlParts(cond) {
+  if (cond.urlParts && typeof cond.urlParts === 'object') return cond.urlParts;
+  const parsed = parseUrlRegex(cond.value);
+  if (!parsed) return null;
+  cond.urlParts = parsed;
+  return cond.urlParts;
 }
 
 /** 新建一个 Action（参数组默认取官方默认值） */
@@ -365,90 +498,73 @@ const ARG_CONTROL_TYPES = [
   { v: 'switch', label: 'switch · 开关' }
 ];
 
-/** 区块默认数据 */
+/** 区块默认数据（内容对齐官方示例插件：https://nsloon.app/docs/Plugin/） */
 const BLOCK_TEMPLATES = {
   details: {
     type: 'details',
     data: {
-      desc: '一个用于演示的 Loon 插件',
+      name: 'Demo Plugin',
+      desc: '展示插件信息和用户参数',
       author: 'kyler404',
       homepage: 'https://github.com/kyler404/loon-plugin-demo',
-      tag: 'Proxy',
+      icon: 'https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png',
       system: 'iOS,iPadOS,tvOS,macOS',
-      icon: 'https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png'
+      systemVersion: '15',
+      loonVersion: '3.5.1(978)',
+      tag: '示例,工具',
+      pluginType: 'normal'
     }
   },
   argument: {
     type: 'argument',
     data: {
       items: [
-        { name: 'token', type: 'input', value: '默认令牌', options: '', tag: '令牌', desc: '用于脚本鉴权的令牌', num: false }
+        { name: 'name',    type: 'input',  value: 'Loon',        options: '',         tag: '名称', desc: '输入一个名称', num: false },
+        { name: 'region',  type: 'select', value: 'CN',          options: 'CN,US,JP', tag: '地区', desc: '',              num: false },
+        { name: 'enabled', type: 'switch', value: 'true',        options: '',         tag: '启用', desc: '',              num: false }
       ]
     }
   },
   general: {
     type: 'general',
-    data: { bypassTun: '192.168.0.0/16, 10.0.0.0/8', skipProxy: '', realIp: '', dnsServer: '' }
+    data: { bypassTun: '', skipProxy: '', realIp: '', dnsServer: '' }
   },
   rules: {
     type: 'rules',
     data: {
-      root: {
-        conditions: [
-          { type: 'DOMAIN-SUFFIX', value: 'example.com', policy: 'DIRECT' },
-          { type: 'AND', value: '', policy: 'REJECT', children: [
-            { type: 'DOMAIN-KEYWORD', value: 'ads', policy: 'DIRECT' },
-            { type: 'USER-AGENT', value: '*AdBot*', policy: 'DIRECT' }
-          ] }
-        ]
-      }
+      root: { conditions: [] }
     }
   },
-  /* 复写默认模板照抄官方生成器的「请求 Header 清理」与「修改 JSON 响应」两个示例 */
+  /* 复写区块：固定单条结构（IF + THEN），不再支持「添加复写」「载入官方示例」 */
   rewrite: {
     type: 'rewrite',
-    data: {
-      list: [rewritePreset('request'), rewritePreset('response')]
-    }
+    data: { list: [emptyRewriteItem()] }
   },
   host: {
     type: 'host',
-    data: {
-      items: [{ name: 'example.com', value: 'server:223.5.5.5' }]
-    }
+    data: { items: [] }
   },
   script: {
     type: 'script',
     data: {
+      syntax: 'legacy',
       kind: 'response',
-      match: '^https?:\\/\\/api\\.example\\.com\\/v1\\/user',
+      match: '^https?:\\/\\/example\\.com\\/conf\\/server-mapping',
       path: 'https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js',
       file: 'demo.js',
-      tag: 'DemoUser',
-      timeout: '10',
+      tag: '移除广告',
+      timeout: '',
       enable: 'true',
       requiresBody: 'true',
+      binaryMode: 'false',
       argMode: 'object',
-      argValue: 'token',
-      code: [
-        'const body = JSON.parse($response.body || "{}");',
-        'const { token } = $argument || {};',
-        '',
-        'if (!body || typeof body !== "object") {',
-        '  $done({});',
-        '} else {',
-        '  body.data = body.data || {};',
-        '  body.data.demo = true;',
-        '  body.data.message = "Hello from Loon Plugin Studio";',
-        '  body.data.token = token || "";',
-        '  $done({ status: 200, body: JSON.stringify(body) });',
-        '}'
-      ].join('\n')
+      argValue: 'name,region,enabled',
+      code: ''
     }
   },
   mitm: {
     type: 'mitm',
-    data: { hosts: 'api.example.com\napi2.example.com' }
+    data: { hosts: 'example.com' }
   }
 };
 
@@ -689,6 +805,27 @@ function migrateRewriteItem(item) {
   };
 }
 
+/* 草稿迁移：旧结构 plugin.name → 新结构 plugin.filename；详情区补上 #!name */
+function migratePlugin(p) {
+  if (!p || typeof p !== 'object') return p;
+  if (!p.filename) {
+    const legacyName = String(p.name || '').trim();
+    p.filename = legacyName
+      ? legacyName.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'loon-plugin'
+      : 'loon-plugin';
+  }
+  if (!Array.isArray(p.blocks)) p.blocks = [];
+  p.blocks.forEach((b) => {
+    if (!b || typeof b !== 'object') return;
+    if (!b.id) b.id = uid();
+    if (b.type === 'details' && b.data && !b.data.name && p.name) {
+      b.data.name = String(p.name).trim() || b.data.name || '未命名插件';
+    }
+  });
+  delete p.name;
+  return p;
+}
+
 function loadState() {
   let raw = null;
   try {
@@ -700,7 +837,9 @@ function loadState() {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.plugins) && parsed.plugins.length) {
-        state.plugins = parsed.plugins.filter((p) => p && Array.isArray(p.blocks));
+        state.plugins = parsed.plugins
+          .filter((p) => p && Array.isArray(p.blocks))
+          .map(migratePlugin);
         state.selectedId = parsed.selectedId;
       }
     } catch (err) {
@@ -714,13 +853,17 @@ function loadState() {
   if (!state.plugins.some((p) => p.id === state.selectedId)) {
     state.selectedId = state.plugins[0].id;
   }
-  state.plugins.forEach((p) => p.blocks.forEach((b) => {
-    if (!b.id) b.id = uid();
-    /* 旧版复写草稿迁移到官网 rewrite-builder 结构 */
-    if (b.type === 'rewrite' && b.data && Array.isArray(b.data.list)) {
-      b.data.list = b.data.list.map(migrateRewriteItem).filter(Boolean);
-    }
-  }));
+  state.plugins.forEach((p) => {
+    p.blocks.forEach((b) => {
+      if (!b.id) b.id = uid();
+      /* 旧版复写草稿迁移到官网 rewrite-builder 结构；
+         复写区块固定为单条结构，确保 list 至少有一条（空则补空白项） */
+      if (b.type === 'rewrite' && b.data) {
+        const arr = Array.isArray(b.data.list) ? b.data.list.map(migrateRewriteItem).filter(Boolean) : [];
+        b.data.list = arr.length ? arr : [emptyRewriteItem()];
+      }
+    });
+  });
 }
 
 /* ========================= 插件 / 区块操作 ========================= */
@@ -728,7 +871,7 @@ function loadState() {
 function createDemoPlugin() {
   return {
     id: uid(),
-    name: 'Demo Plugin',
+    filename: 'demo',
     /* 示例插件带上全部 8 个区块，作为新语法的活样例 */
     blocks: ['details', 'argument', 'general', 'rules', 'rewrite', 'host', 'script', 'mitm'].map((type) =>
       Object.assign({ id: uid() }, clone(BLOCK_TEMPLATES[type]))
@@ -736,11 +879,15 @@ function createDemoPlugin() {
   };
 }
 
-function createPlugin(name) {
+function createPlugin(filename) {
+  const safe = String(filename || '').trim().replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'loon-plugin';
+  const details = Object.assign({ id: uid() }, clone(BLOCK_TEMPLATES.details));
+  details.data = details.data || {};
+  details.data.name = safe;
   return {
     id: uid(),
-    name,
-    blocks: [Object.assign({ id: uid() }, clone(BLOCK_TEMPLATES.details))]
+    filename: safe,
+    blocks: [details]
   };
 }
 
@@ -828,18 +975,14 @@ function buildOutput() {
     add('warn', `有 ${detailsBlocks.length} 个「详情」区块，只有第一个会生效，其余会被忽略。`, detailsBlocks[1].id);
   }
   if (!detailsBlocks.length) {
-    add('warn', '没有「详情」区块，插件缺少 #!desc / #!icon 等元信息（#!name 仍会使用上方插件名）。');
+    add('warn', '没有「详情」区块，插件缺少 #!desc / #!icon / #!name 等元信息。');
   }
 
-  const name = (plugin.name || '').trim();
-  if (!name) add('error', '插件名称为空。<code>#!name</code> 是 Loon 插件的必需字段。');
+  const displayName = String((d && d.name) || plugin.filename || 'Untitled Plugin').trim();
+  if (!displayName) add('error', '插件显示名为空。<code>#!name</code> 是 Loon 插件的必需字段（可在详情区块填写）。');
 
-  lines.push(`#!name=${name || 'Untitled Plugin'}`);
+  lines.push(`#!name=${displayName}`);
   lines.push(`#!desc=${(d.desc || '').trim() || 'Loon plugin'}`);
-
-  const icon = (d.icon || '').trim();
-  if (icon) lines.push(`#!icon=${icon}`);
-  else add('warn', '未填写 <code>#!icon</code>，Loon 的插件列表会显示默认图标。', detailsBlocks[0] && detailsBlocks[0].id);
 
   const author = (d.author || '').trim();
   if (author) lines.push(`#!author=${author}`);
@@ -850,11 +993,24 @@ function buildOutput() {
     else add('warn', `<code>#!homepage</code> 需要以 http:// 或 https:// 开头，已跳过。`, detailsBlocks[0] && detailsBlocks[0].id);
   }
 
-  const tag = (d.tag || '').trim();
-  if (tag) lines.push(`#!tag=${tag}`);
+  const icon = (d.icon || '').trim();
+  if (icon) lines.push(`#!icon=${icon}`);
+  else add('warn', '未填写 <code>#!icon</code>，Loon 的插件列表会显示默认图标。', detailsBlocks[0] && detailsBlocks[0].id);
 
   const system = (d.system || '').trim();
   if (system) lines.push(`#!system=${system}`);
+
+  const systemVersion = (d.systemVersion || '').trim();
+  if (systemVersion) lines.push(`#!system_version=${systemVersion}`);
+
+  const loonVersion = (d.loonVersion || '').trim();
+  if (loonVersion) lines.push(`#!loon_version=${loonVersion}`);
+
+  const tag = (d.tag || '').trim();
+  if (tag) lines.push(`#!tag=${tag}`);
+
+  const pluginType = (d.pluginType || '').trim();
+  if (pluginType) lines.push(`#!type=${pluginType}`);
 
   lines.push('');
 
@@ -876,8 +1032,9 @@ function buildOutput() {
   const generalLines = [];
   blocksOfType('general').forEach((block) => {
     GENERAL_FIELDS.forEach((f) => {
+      // 官方示例中 [General] 的四个字段即使留空也要显示（方便用户填入）
       const value = String(block.data[f.k] || '').trim();
-      if (value) generalLines.push(`${f.out} = ${value}`);
+      generalLines.push(`${f.out} = ${value}`);
     });
   });
   if (generalLines.length) {
@@ -887,44 +1044,48 @@ function buildOutput() {
   }
 
   /* ---------- [Rule] ---------- */
+  const ruleBlocks = blocksOfType('rules');
   const ruleLines = [];
-  blocksOfType('rules').forEach((block) => {
+  ruleBlocks.forEach((block) => {
     const root = block.data.root || { conditions: [] };
     const conditions = root.conditions || [];
-    if (!conditions.length) add('warn', '「规则」区块里还没有规则，<code>[Rule]</code> 会被跳过。', block.id);
+    if (!conditions.length) add('hint', '「规则」区块目前为空，可以在左侧添加 DOMAIN / IP 等规则。', block.id);
     conditions.forEach((cond) => {
       const line = serializeCondition(cond, true, add, block.id);
       if (line) ruleLines.push(line);
     });
   });
-  if (ruleLines.length) {
+  if (ruleBlocks.length) {
     lines.push('[Rule]');
     ruleLines.forEach((line) => lines.push(line));
     lines.push('');
   }
 
   /* ---------- [Rewrite]（Loon 3.5.1 (978) 新语法） ---------- */
+  const rewriteBlocks = blocksOfType('rewrite');
   const rewriteLines = [];
-  blocksOfType('rewrite').forEach((block) => {
+  rewriteBlocks.forEach((block) => {
     (block.data.list || []).forEach((item) => {
       const line = serializeRewrite(item, argNames, add, block.id);
       if (line) rewriteLines.push(line);
     });
   });
-  if (rewriteLines.length) {
+  if (rewriteBlocks.length) {
     lines.push('[Rewrite]');
     rewriteLines.forEach((line) => lines.push(line));
     lines.push('');
   }
 
   /* ---------- [Host] ---------- */
+  const hostBlocks = blocksOfType('host');
   const hostLines = [];
-  blocksOfType('host').forEach((block) => {
+  hostBlocks.forEach((block) => {
     (block.data.items || []).forEach((item) => {
       const host = (item.name || '').trim();
       const value = (item.value || '').trim();
       if (!host || !value) {
-        add('error', 'Host 条目需要同时填写域名和映射值，该行不会生成。', block.id);
+        // 空条目只提示不报错，允许示例插件以空 Host 存在
+        if (host || value) add('error', 'Host 条目需要同时填写域名和映射值，该行不会生成。', block.id);
         return;
       }
       if (/[\s,]/.test(host)) {
@@ -934,7 +1095,7 @@ function buildOutput() {
       hostLines.push(`${host} = ${value}`);
     });
   });
-  if (hostLines.length) {
+  if (hostBlocks.length) {
     lines.push('[Host]');
     hostLines.forEach((line) => lines.push(line));
     lines.push('');
@@ -1148,7 +1309,7 @@ function serializeArgument(item, add, blockId) {
   const desc = (item.desc || '').trim();
   if (desc) parts.push(`desc=${desc}`);
 
-  return `${argName} = ${parts.join(', ')}`;
+  return `${argName} = ${parts.join(',')}`;
 }
 
 /* ---------- [Rewrite]（978 新语法） ---------- */
@@ -1545,7 +1706,95 @@ function serializeRewrite(item, argNames, add, blockId) {
 /* ---------- [Script]（983 新语法） ---------- */
 
 /** 序列化脚本：<kind> [if <cond>] then script("path"[, <argument>]) [with <options>] */
+/** 旧式脚本序列化（pre-978 语法）：http-response <url> script-path=<path>,<attrs> */
+function serializeScriptLegacy(data, argNames, add, blockId) {
+  const path = (data.path || '').trim();
+  if (!path) {
+    add('error', '脚本缺少路径，Loon 无法加载脚本，该行不会生成。', blockId);
+    return null;
+  }
+  const kind = data.kind;
+  const match = (data.match || '').trim();
+
+  /* 前缀 */
+  let head = '';
+  if (kind === 'request') head = 'http-request';
+  else if (kind === 'response') head = 'http-response';
+  else if (kind === 'cron') head = 'cron';
+  else if (kind === 'network-changed') head = 'network-changed';
+  else head = 'http-response';
+
+  /* URL 匹配（response / request 必需） */
+  if (kind === 'request' || kind === 'response') {
+    if (!match) {
+      add('error', `<code>${head}</code> 脚本缺少 URL 匹配正则，该行不会生成。`, blockId);
+      return null;
+    }
+    head = `${head} ${match}`;
+  } else if (kind === 'cron') {
+    if (!match) {
+      add('error', 'cron 脚本缺少 Cron 表达式，该行不会生成。', blockId);
+      return null;
+    }
+    head = `${head} ${match}`;
+  }
+
+  const params = [`script-path=${path}`];
+
+  /* requires-body / binary-body-mode */
+  if (data.requiresBody === 'true') params.push('requires-body=true');
+  if (data.binaryMode === 'true') params.push('binary-body-mode=true');
+
+  /* tag (不加引号) */
+  const label = (data.tag || '').trim();
+  if (label) params.push(`tag=${label}`);
+
+  /* timeout */
+  const timeout = String(data.timeout || '').trim();
+  if (timeout) {
+    if (/^\d+$/.test(timeout) && Number(timeout) > 0) params.push(`timeout=${timeout}`);
+    else add('warn', `脚本的 timeout 应为正整数，当前是 <code>${escapeHtml(timeout)}</code>，已跳过。`, blockId);
+  }
+
+  /* enable（默认 true 就不写，除非 false） */
+  if (data.enable === 'false') params.push('enable=false');
+
+  /* argument */
+  const argMode = ARG_MODES.some((m) => m.v === data.argMode) ? data.argMode : 'none';
+  if (argMode === 'string') {
+    const value = String(data.argValue || '').trim();
+    if (value) params.push(`argument="${quoteLoonString(value)}"`);
+  } else if (argMode === 'raw') {
+    const value = String(data.argValue || '').trim();
+    if (value) params.push(`argument=\`${value.replace(/`/g, '``')}\``);
+  } else if (argMode === 'object') {
+    const names = String(data.argValue || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!names.length) {
+      add('error', '对象传参不能为空：至少填一个已在「参数」区块声明的参数名，该行不会生成。', blockId);
+      return null;
+    }
+    const unknown = names.find((n) => !argNames.has(n));
+    if (unknown) {
+      add('error', `对象传参引用了未声明的参数 <code>${escapeHtml(unknown)}</code>，请在「参数」区块声明，该行不会生成。`, blockId);
+      return null;
+    }
+    if (new Set(names).size !== names.length) {
+      add('error', '对象传参里同一个参数被引用了多次，该行不会生成。', blockId);
+      return null;
+    }
+    params.push(`argument=[{${names.join('},{')}}]`);
+  }
+
+  const line = `${head} ${params.join(',')}`;
+  if (checkPluginRefs(line, argNames, null, add, blockId, '这条脚本')) return null;
+  return line;
+}
+
 function serializeScript(data, argNames, add, blockId) {
+  /* 旧式语法分支（官方示例插件采用 pre-978 格式） */
+  if (data && data.syntax === 'legacy') {
+    return serializeScriptLegacy(data, argNames, add, blockId);
+  }
   const meta = SCRIPT_KINDS.find((s) => s.v === data.kind) || SCRIPT_KINDS[1];
   const kind = meta.v;
   const path = (data.path || '').trim();
@@ -1766,8 +2015,8 @@ function renderSidebar() {
     .map(
       (plugin) => `
       <div class="plugin-item ${plugin.id === state.selectedId ? 'is-active' : ''}" data-plugin-id="${plugin.id}" role="button" tabindex="0">
-        <span class="p-name">${escapeHtml(plugin.name || '未命名插件')}</span>
-        <button class="btn-icon is-danger p-del" data-act="del-plugin" data-plugin-id="${plugin.id}" title="删除插件" aria-label="删除插件 ${escapeHtml(plugin.name || '未命名插件')}">${ICONS.trash}</button>
+        <span class="p-name"><span class="p-base">${escapeHtml(plugin.filename || '未命名')}</span><span class="p-ext">.plugin</span></span>
+        <button class="btn-icon is-danger p-del" data-act="del-plugin" data-plugin-id="${plugin.id}" title="删除插件" aria-label="删除插件 ${escapeHtml(plugin.filename || '未命名')}.plugin">${ICONS.trash}</button>
       </div>`
     )
     .join('');
@@ -1849,6 +2098,11 @@ function renderDetails(block) {
   return `
     <div class="grid">
       <div class="field span-all">
+        <label>插件显示名 · #!name</label>
+        <input type="text" data-field="name" value="${escapeHtml(d.name || '')}" placeholder="Demo Plugin" />
+        <span class="hint">Loon 插件列表里展示的标题（对应 <code>#!name</code>），与文件名独立。</span>
+      </div>
+      <div class="field span-all">
         <label>插件描述 · #!desc</label>
         <input type="text" data-field="desc" value="${escapeHtml(d.desc || '')}" placeholder="一句话说明这个插件做什么" />
       </div>
@@ -1870,9 +2124,21 @@ function renderDetails(block) {
         <label>主页 · #!homepage</label>
         <input type="text" data-field="homepage" value="${escapeHtml(d.homepage || '')}" placeholder="https://github.com/..." />
       </div>
-      <div class="field span-all">
+      <div class="field">
         <label>支持系统 · #!system</label>
         <input type="text" data-field="system" value="${escapeHtml(d.system || '')}" placeholder="iOS,iPadOS,tvOS,macOS" />
+      </div>
+      <div class="field">
+        <label>插件类型 · #!type</label>
+        <input type="text" data-field="pluginType" value="${escapeHtml(d.pluginType || '')}" placeholder="normal 或 Jacob" />
+      </div>
+      <div class="field">
+        <label>系统版本 · #!system_version</label>
+        <input type="text" data-field="systemVersion" value="${escapeHtml(d.systemVersion || '')}" placeholder="如 15" />
+      </div>
+      <div class="field">
+        <label>最低 Loon 版本 · #!loon_version</label>
+        <input type="text" data-field="loonVersion" value="${escapeHtml(d.loonVersion || '')}" placeholder="如 3.5.1(978)" />
       </div>
     </div>`;
 }
@@ -2190,7 +2456,7 @@ function renderRewriteActionCard(block, idx, action, aidx, phase) {
     </div>`;
 }
 
-/** 渲染单个条件 */
+/** 渲染单个条件：配置栏（字段/操作符/值类型/捕获/删除）+ 值区域（URL构建器/手写正则/普通输入） */
 function renderRewriteCond(block, idx, cond, path, phase) {
   const fields = REWRITE_FIELDS.filter((f) => f.phases.includes(phase));
   const fieldMeta = REWRITE_FIELDS.find((f) => f.v === cond.field) || fields[0];
@@ -2198,65 +2464,119 @@ function renderRewriteCond(block, idx, cond, path, phase) {
   const valueTypes = REWRITE_VALUE_TYPES.filter((t) => t.ops.includes(cond.operator));
   const valueType = valueTypes.some((t) => t.v === cond.valueType) ? cond.valueType : valueTypes[0].v;
   const showRegex = isRegex && valueType === 'regex';
-  const valueLabel = valueType === 'regex' ? '正则内容' : valueType === 'variable' ? '参数名' : '比较值';
-  return `
-    <div class="row is-cond" data-path="${path}">
-      <div class="field">
-        <label>字段</label>
-        <select data-field="cond-field">${optionsHtml(fields, cond.field)}</select>
-      </div>
-      ${
-        fieldMeta.header
-          ? `<div class="field"><label>Header 名称</label><input type="text" data-field="cond-header-name" value="${escapeHtml(
-              cond.headerName || ''
-            )}" placeholder="Content-Type" /></div>`
-          : ''
-      }
-      ${
-        fieldMeta.variable
-          ? `<div class="field"><label>参数名</label><input type="text" data-field="cond-var-name" value="${escapeHtml(
-              cond.variableName || ''
-            )}" placeholder="token" /></div>`
-          : ''
-      }
-      <div class="field">
-        <label>操作符</label>
-        <select data-field="cond-op">${optionsHtml(REWRITE_OPS, cond.operator)}</select>
-      </div>
-      <div class="field">
-        <label>${isRegex ? '匹配值' : '值类型'}</label>
-        <select data-field="cond-vtype">${optionsHtml(valueTypes, valueType)}</select>
-      </div>
-      <div class="field grow">
-        <label>${valueLabel}</label>
-        ${
-          showRegex
-            ? `<div class="composite-input">
-          <span class="input-affix">/</span>
-          <input type="text" data-field="cond-value" value="${escapeHtml(cond.value || '')}" placeholder="^https:\\/\\/example\\.com" />
-          <span class="input-affix">/</span>
+  /* URL 正则默认走分段构建器（协议://主机:端口/路径?查询），解析不了的手写正则回退到手写模式 */
+  const isUrl = cond.field === 'url';
+  let useUrlBuilder = showRegex && isUrl && cond.urlMode !== 'raw';
+  let parts = null;
+  if (useUrlBuilder) {
+    parts = ensureUrlParts(cond);
+    if (!parts) {
+      cond.urlMode = 'raw';
+      useUrlBuilder = false;
+    }
+  }
+  const valueLabel = useUrlBuilder ? 'URL 匹配' : valueType === 'regex' ? '正则内容' : valueType === 'variable' ? '参数名' : '比较值';
+  const flagButtons = `
           <div class="flag-group" role="group" aria-label="正则 flags">${['i', 'm', 's']
             .map(
               (f) =>
                 `<button type="button" class="btn btn-xs${String(cond.flags || '').includes(f) ? ' is-active' : ''}" data-act="toggle-flag" data-flag="${f}">${f}</button>`
             )
-            .join('')}</div>
-        </div>`
-            : `<input type="text" data-field="cond-value" value="${escapeHtml(cond.value || '')}" placeholder="${
-                valueType === 'variable' ? 'urlPattern' : '输入比较值'
-              }" />`
+            .join('')}</div>`;
+  /* 配置栏：字段 / Header名 / 参数名 / 操作符 / 值类型 / 捕获as / 删除 */
+  const configBar = `
+      <div class="cond-bar">
+        <div class="field">
+          <label>字段</label>
+          <select data-field="cond-field">${optionsHtml(fields, cond.field)}</select>
+        </div>
+        ${
+          fieldMeta.header
+            ? `<div class="field"><label>Header 名称</label><input type="text" data-field="cond-header-name" value="${escapeHtml(
+                cond.headerName || ''
+              )}" placeholder="Content-Type" /></div>`
+            : ''
         }
-      </div>
-      ${
-        isRegex
-          ? `<div class="field"><label>捕获 as（可选）</label><input type="text" data-field="cond-capture" value="${escapeHtml(
-              cond.captureName || ''
-            )}" placeholder="item" /></div>`
-          : ''
-      }
-      <div class="row-actions">
-        <button class="btn-icon is-danger" type="button" data-act="del-cond" data-id="${block.id}" data-idx="${idx}" data-path="${path}" title="删除条件" aria-label="删除条件">${ICONS.trash}</button>
-      </div>
+        ${
+          fieldMeta.variable
+            ? `<div class="field"><label>参数名</label><input type="text" data-field="cond-var-name" value="${escapeHtml(
+                cond.variableName || ''
+              )}" placeholder="token" /></div>`
+            : ''
+        }
+        <div class="field">
+          <label>操作符</label>
+          <select data-field="cond-op">${optionsHtml(REWRITE_OPS, cond.operator)}</select>
+        </div>
+        <div class="field">
+          <label>${isRegex ? '匹配值' : '值类型'}</label>
+          <select data-field="cond-vtype">${optionsHtml(valueTypes, valueType)}</select>
+        </div>
+        ${
+          isRegex
+            ? `<div class="field"><label>捕获 as（可选）</label><input type="text" data-field="cond-capture" value="${escapeHtml(
+                cond.captureName || ''
+              )}" placeholder="item" /></div>`
+            : ''
+        }
+        <div class="row-actions">
+          <button class="btn-icon is-danger" type="button" data-act="del-cond" data-id="${block.id}" data-idx="${idx}" data-path="${path}" title="删除条件" aria-label="删除条件">${ICONS.trash}</button>
+        </div>
+      </div>`;
+  /* 值区域：URL 构建器 / 手写正则 / 普通输入 */
+  const valueBody = useUrlBuilder
+    ? `<div class="cond-value">
+        <div class="url-builder">
+          <div class="grid">
+            <div class="field col-2">
+              <label>协议</label>
+              <select data-field="url-scheme">${optionsHtml(URL_SCHEMES, parts.scheme || 'https')}</select>
+            </div>
+            <div class="field col-2">
+              <label>端口（可留空）</label>
+              <input type="text" data-field="url-port" value="${escapeHtml(parts.port || '')}" placeholder="如 443" />
+            </div>
+            <div class="field col-2">
+              <label>主机（域名 / IP）</label>
+              <input type="text" data-field="url-host" value="${escapeHtml(parts.host || '')}" placeholder="如 api.example.com" />
+            </div>
+            <div class="field col-3">
+              <label>路径（开头无需 /）</label>
+              <input type="text" data-field="url-path" value="${escapeHtml(parts.path || '')}" placeholder="如 v1/user" />
+            </div>
+            <div class="field col-3">
+              <label>查询参数（开头无需 ?）</label>
+              <input type="text" data-field="url-query" value="${escapeHtml(parts.query || '')}" placeholder="如 page=1&amp;limit=10" />
+            </div>
+          </div>
+          <div class="url-foot">
+            <label class="url-check"><input type="checkbox" data-field="url-exact"${parts.exact ? ' checked' : ''} /> 完整匹配（结尾自动加 $）</label>
+            ${flagButtons}
+            <button type="button" class="btn btn-xs url-mode-btn" data-act="url-mode" data-mode="raw">手写正则</button>
+          </div>
+        </div>
+      </div>`
+    : showRegex
+    ? `<div class="cond-value">
+        <label class="cond-value-label">${valueLabel}</label>
+        <div class="composite-input">
+          <span class="input-affix">/</span>
+          <input type="text" data-field="cond-value" value="${escapeHtml(cond.value || '')}" placeholder="^https:\\/\\/example\\.com" />
+          <span class="input-affix">/</span>
+          ${flagButtons}
+          ${isUrl ? `<button type="button" class="btn btn-xs url-mode-btn" data-act="url-mode" data-mode="builder">URL 构建器</button>` : ''}
+        </div>
+      </div>`
+    : `<div class="cond-value">
+        <label class="cond-value-label">${valueLabel}</label>
+        <input type="text" data-field="cond-value" value="${escapeHtml(cond.value || '')}" placeholder="${
+          valueType === 'variable' ? 'urlPattern' : '输入比较值'
+        }" />
+      </div>`;
+  return `
+    <div class="row is-cond" data-path="${path}">
+      ${configBar}
+      ${valueBody}
     </div>`;
 }
 
@@ -2295,27 +2615,28 @@ function renderRewriteGroup(block, idx, group, path, depth, phase) {
     </div>`;
 }
 
-/** 渲染一条复写：阶段 + 条件树 + Action 列表 */
+/** 渲染一条复写：阶段切换 + IF · 匹配条件 + THEN · 执行动作（固定两段，不可重复添加） */
 function renderRewriteItem(block, item, idx) {
   const phase = item.phase === 'response' ? 'response' : 'request';
   const actions = item.actions || [];
+  const condCount = countRewriteConds(item.conditions);
   return `
     <div class="rewrite-item" data-idx="${idx}">
       <div class="rewrite-head">
-        <div class="field">
+        <span class="rewrite-phase-tag" data-phase="${phase}">${phase === 'response' ? 'Response' : 'Request'}</span>
+        <div class="field rewrite-phase-field">
           <label>阶段</label>
           <select data-field="phase">${optionsHtml(REWRITE_PHASES, phase)}</select>
         </div>
-        <div class="row-actions">
-          <button class="btn-icon is-danger" type="button" data-act="del-rewrite" data-idx="${idx}" title="删除复写" aria-label="删除复写">${ICONS.trash}</button>
-        </div>
+        <span class="rewrite-stat"><strong>${condCount}</strong> 条件</span>
+        <span class="rewrite-stat"><strong>${actions.length}</strong> 动作</span>
       </div>
-      <div class="rewrite-section">
-        <div class="rewrite-section-title"><span class="step-no">01</span> IF · 匹配条件</div>
+      <div class="rewrite-section is-if">
+        <div class="rewrite-section-title"><span class="step-no">IF</span> 匹配条件</div>
         ${renderRewriteGroup(block, idx, item.conditions, '', 0, phase)}
       </div>
-      <div class="rewrite-section">
-        <div class="rewrite-section-title"><span class="step-no">02</span> THEN · 执行动作</div>
+      <div class="rewrite-section is-then">
+        <div class="rewrite-section-title"><span class="step-no">THEN</span> 执行动作</div>
         <div class="action-list">
           ${actions.map((action, aidx) => renderRewriteActionCard(block, idx, action, aidx, phase)).join('')}
         </div>
@@ -2324,22 +2645,14 @@ function renderRewriteItem(block, item, idx) {
     </div>`;
 }
 
-/** [Rewrite]（978 新语法）：条件树 + Action 列表，支持载入官方示例 */
+/** [Rewrite]（978 新语法）：固定单条复写结构 = IF · 匹配条件 + THEN · 执行动作 */
 function renderRewrite(block) {
   const list = block.data.list || [];
+  /* 单条结构：始终只渲染首项；旧草稿多余项静默忽略，避免数据丢失 */
+  const item = list[0] || emptyRewriteItem();
   return `
     <div class="rows">
-      ${list.map((item, idx) => renderRewriteItem(block, item, idx)).join('')}
-    </div>
-    <div class="rewrite-foot">
-      <button class="btn btn-sm add-row" type="button" data-act="add-rewrite" data-id="${block.id}">＋ 添加复写</button>
-      <label class="mini-field">
-        <span>载入官方示例</span>
-        <select data-act="load-rewrite-preset" data-id="${block.id}">
-          <option value="">选择示例…</option>
-          ${REWRITE_PRESET_KEYS.map((p) => `<option value="${p.v}">${escapeHtml(p.label)}</option>`).join('')}
-        </select>
-      </label>
+      ${renderRewriteItem(block, item, 0)}
     </div>
     <div class="note-box">输出形如 <code>request if \${url} ~= /正则/ &amp;&amp; \${request.method} == "POST" then request.header.set("X-Loon", "true")</code>。条件支持 AND / OR 嵌套分组；用 <code>as 捕获名</code> 保存匹配结果后可用 <code>\${捕获名.1}</code> 引用。同一 Action 填多组参数会自动生成数组批量语法。含 Response Mock 的复写只能搭配响应 Header Action。</div>`;
 }
@@ -2554,7 +2867,7 @@ function updateChrome(errors, warns) {
   const plugin = currentPlugin();
   if (!plugin) return;
   el.blockCount.textContent = `${plugin.blocks.length} 个区块`;
-  if (document.activeElement !== el.nameInput) el.nameInput.value = plugin.name || '';
+  if (document.activeElement !== el.nameInput) el.nameInput.value = plugin.filename || '';
 
   const errCount = errors ? errors.length : state.view.issues.filter((i) => i.level === 'error').length;
   const warnCount = warns ? warns.length : state.view.issues.filter((i) => i.level === 'warn').length;
@@ -2590,7 +2903,7 @@ function bindEvents() {
         toast('至少保留一个插件', 'warn');
         return;
       }
-      if (!window.confirm(`删除插件「${plugin ? plugin.name : ''}」？此操作不可撤销。`)) return;
+      if (!window.confirm(`删除插件「${plugin ? plugin.filename + '.plugin' : ''}」？此操作不可撤销。`)) return;
       state.plugins = state.plugins.filter((p) => p.id !== id);
       if (state.selectedId === id) state.selectedId = state.plugins[0].id;
       renderAll();
@@ -2605,7 +2918,7 @@ function bindEvents() {
   });
 
   el.newPluginBtn.addEventListener('click', () => {
-    const plugin = createPlugin(`未命名插件 ${state.plugins.length + 1}`);
+    const plugin = createPlugin(`untitled-plugin-${state.plugins.length + 1}`);
     state.plugins.push(plugin);
     state.selectedId = plugin.id;
     renderAll();
@@ -2623,13 +2936,28 @@ function bindEvents() {
     toast('已恢复示例插件', 'success');
   });
 
-  /* --- 插件名 --- */
+  /* --- 插件文件名（不含 .plugin 后缀）--- */
   el.nameInput.addEventListener('input', () => {
     const plugin = currentPlugin();
     if (!plugin) return;
-    plugin.name = el.nameInput.value;
-    const label = el.pluginList.querySelector(`[data-plugin-id="${plugin.id}"] .p-name`);
-    if (label) label.textContent = plugin.name || '未命名插件';
+    const raw = el.nameInput.value;
+    const cleaned = raw
+      .replace(/[\\/:*?"<>|]+/g, '-')      // 文件系统非法字符 → 连字符
+      .replace(/\s+/g, '-')                  // 空白 → 连字符
+      .replace(/^-+|-+$/g, '')               // 去掉首尾连字符
+      .slice(0, 80);
+    if (cleaned !== raw) {
+      // 视觉上给用户瞬间反馈为清洗后的值，避免显示的和存的不一样
+      const pos = el.nameInput.selectionStart;
+      const delta = cleaned.length - raw.length;
+      el.nameInput.value = cleaned;
+      try {
+        el.nameInput.setSelectionRange(Math.max(0, pos + delta), Math.max(0, pos + delta));
+      } catch (_) {}
+    }
+    plugin.filename = cleaned || 'loon-plugin';
+    const label = el.pluginList.querySelector(`[data-plugin-id="${plugin.id}"] .p-base`);
+    if (label) label.textContent = plugin.filename;
     renderPreview();
     scheduleSave();
   });
@@ -2797,19 +3125,8 @@ function onCanvasClick(event) {
     return;
   }
 
-  /* ---------- [Rewrite]：条件树 + Action 列表 ---------- */
-  if (action === 'add-rewrite') {
-    (block.data.list = block.data.list || []).push(rewritePreset('request'));
-    afterStructureChange();
-    return;
-  }
-
-  if (action === 'del-rewrite') {
-    block.data.list.splice(Number(btn.dataset.idx), 1);
-    afterStructureChange();
-    return;
-  }
-
+  /* ---------- [Rewrite]：单条复写 = IF 条件树 + THEN Action 列表 ----------
+     不再有 add-rewrite / del-rewrite（区块固定单条结构） */
   if (action === 'add-cond' || action === 'add-cond-group') {
     const item = block.data.list[Number(btn.dataset.idx)];
     if (!item) return;
@@ -2836,6 +3153,24 @@ function onCanvasClick(event) {
     const group = resolveRewriteNode(item.conditions, btn.dataset.path || '');
     if (!group) return;
     group.logic = btn.dataset.logic === '||' ? '||' : '&&';
+    afterStructureChange();
+    return;
+  }
+
+  /* URL 正则条件：构建器 ↔ 手写正则 模式切换 */
+  if (action === 'url-mode') {
+    const wrap = btn.closest('.rewrite-item');
+    const condRow = btn.closest('.row.is-cond');
+    const item = wrap ? block.data.list[Number(wrap.dataset.idx)] : null;
+    const cond = item && condRow ? resolveRewriteNode(item.conditions, condRow.dataset.path || '') : null;
+    if (!cond || cond.kind === 'group') return;
+    if (btn.dataset.mode === 'raw') {
+      cond.urlMode = 'raw';
+    } else {
+      cond.urlMode = 'builder';
+      cond.urlParts = parseUrlRegex(cond.value) || defaultUrlParts();
+      cond.value = buildUrlRegex(cond.urlParts);
+    }
     afterStructureChange();
     return;
   }
@@ -2968,22 +3303,6 @@ function afterStructureChange() {
 
 /* ---------- 画布字段输入 ---------- */
 function onCanvasField(event) {
-  /* 「载入官方示例」这类下拉用 data-act 标记，不走字段写入逻辑 */
-  const presetSelect = event.target.closest('[data-act="load-rewrite-preset"]');
-  if (presetSelect) {
-    const key = presetSelect.value;
-    presetSelect.value = '';
-    const block = getBlock(presetSelect.dataset.id);
-    if (!block || !key) return;
-    const preset = rewritePreset(key);
-    if (!preset) return;
-    block.data.list = block.data.list || [];
-    block.data.list.push(preset);
-    toast(`已载入官方示例「${preset.label}」`, 'success');
-    afterStructureChange();
-    return;
-  }
-
   const input = event.target.closest('[data-field]');
   if (!input) return;
   const card = input.closest('.card');
@@ -3117,6 +3436,23 @@ function onCanvasField(event) {
       else if (field === 'cond-header-name') cond.headerName = value;
       else if (field === 'cond-var-name') cond.variableName = value;
       else if (field === 'cond-capture') cond.captureName = value;
+      renderPreview();
+      scheduleSave();
+      return;
+    }
+
+    /* URL 构建器字段：改部件后重新拼正则写回 cond.value（用户无需手写 \/ 转义） */
+    if (field.indexOf('url-') === 0) {
+      const condRow = input.closest('.row.is-cond');
+      const cond = condRow ? resolveRewriteNode(item.conditions, condRow.dataset.path || '') : null;
+      if (!cond || cond.kind === 'group') return;
+      const parts = ensureUrlParts(cond) || defaultUrlParts();
+      const key = field.slice(4);
+      if (key === 'exact') parts.exact = input.checked;
+      else if (key === 'scheme') parts.scheme = value;
+      else parts[key] = value;
+      cond.urlParts = parts;
+      cond.value = buildUrlRegex(parts);
       renderPreview();
       scheduleSave();
       return;
@@ -3257,17 +3593,59 @@ function downloadFile(filename, content) {
 }
 
 function safeName() {
-  return (currentPlugin().name || 'loon-plugin').trim().replace(/[\\/:*?"<>|\s]+/g, '-');
+  const raw = String(currentPlugin().filename || 'loon-plugin').trim();
+  const out = raw.replace(/[\\/:*?"<>|\s]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
+  return out || 'loon-plugin';
 }
 
 function downloadPlugin() {
-  const { text, issues } = state.view;
+  const { text, scripts, issues } = state.view;
   const errors = issues.filter((i) => i.level === 'error');
   if (errors.length) {
     toast(`还有 ${errors.length} 个错误，已导出但 Loon 可能加载失败`, 'error');
   }
-  downloadFile(`${safeName()}.plugin`, text);
-  toast(`已导出 ${safeName()}.plugin`, 'success');
+  const base = safeName();
+  downloadFile(`${base}.plugin`, text);
+
+  /* 同名的 .js 脚手架/脚本：始终与 .plugin 文件一起导出，文件名严格同步 */
+  let js = '';
+  if (Array.isArray(scripts) && scripts.length) {
+    js = scripts
+      .map((s, i) => {
+        const header = scripts.length > 1 ? `// ===== ${s.file || `${base}-${i + 1}.js`} =====` : '';
+        const body = (s.code || '').trimEnd();
+        return header ? `${header}\n${body}` : body;
+      })
+      .filter((chunk) => String(chunk).trim().length)
+      .join('\n\n');
+  }
+  if (!js.trim()) {
+    js = [
+      `// ${base}.js`,
+      `// 与 ${base}.plugin 配套使用的 Loon 脚本`,
+      `// 在 [Script] 区块的「脚本代码」里填写实际内容，重新导出即可覆盖本文件。`,
+      `// 常用入口：`,
+      `//   $argument        → [Argument] 传过来的参数`,
+      `//   $request/$response → HTTP 请求或响应对象`,
+      `//   $done(result)   → 把修改结果返回给 Loon`,
+      ``,
+      `(async () => {`,
+      `  try {`,
+      `    const args = $argument || {};`,
+      `    // TODO: 在这里实现你的逻辑`,
+      `    $done({});`,
+      `  } catch (err) {`,
+      `    console.error('[${base}] 脚本出错：', err);`,
+      `    $done({});`,
+      `  }`,
+      `})();`,
+      ``
+    ].join('\n');
+  } else {
+    js = js.trimEnd() + '\n';
+  }
+  window.setTimeout(() => downloadFile(`${base}.js`, js), 150);
+  toast(`已导出 ${base}.plugin + ${base}.js`, 'success');
 }
 
 function downloadScripts() {

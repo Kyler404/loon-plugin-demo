@@ -109,6 +109,12 @@
   /* 琥珀底上保证对比度的文字色 */
   --warn-text: #92400e;
 
+  /* ---------- 字体 ---------- */
+  /* 等宽字体：优先各系统自带现代等宽字体（Win11=Cascadia / mac=SF Mono），
+     严禁回退到 Courier New（点阵像素字体，长时间阅读眼睛痛） */
+  --mono: ui-monospace, "Cascadia Code", "Cascadia Mono", "SF Mono", "JetBrains Mono",
+    Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+
   /* ---------- 圆角 ---------- */
   --r-xs: 8px;
   --r-sm: 10px;
@@ -228,7 +234,7 @@ select:focus {
 textarea {
   min-height: 96px;
   resize: vertical;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.7;
 }
@@ -682,10 +688,25 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+}
+
+.plugin-item .p-name .p-ext {
+  font-weight: 500;
+  color: var(--muted);
+  opacity: 0.72;
+  font-size: 11.5px;
 }
 
 .plugin-item.is-active .p-name {
   color: var(--brand-600);
+}
+
+.plugin-item.is-active .p-name .p-ext {
+  color: var(--brand-600);
+  opacity: 0.78;
 }
 
 .plugin-item .p-del {
@@ -759,27 +780,54 @@ select {
 }
 
 .page-title {
-  width: min(460px, 100%);
-  margin: 2px 0 0;
-  padding: 2px 6px;
+  width: 100%;
+  margin: 0;
+  padding: 2px 0;
   border: 1px solid transparent;
-  border-radius: var(--r-xs);
+  border-radius: 0;
   background: transparent;
   font-size: clamp(22px, 2.4vw, 28px);
   font-weight: 700;
   letter-spacing: -0.02em;
   min-height: 0;
+  flex: 1;
+  min-width: 0;
 }
 
-.page-title:hover {
+.filename-input {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: min(460px, 100%);
+  width: max-content;
+  padding: 0 6px;
+  margin-top: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  background: transparent;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+
+.filename-input:hover {
   border-color: var(--line);
   background: var(--surface);
 }
 
-.page-title:focus {
+.filename-input:focus-within {
   border-color: var(--brand);
   background: var(--surface);
   box-shadow: var(--ring);
+}
+
+.filename-suffix {
+  flex: 0 0 auto;
+  padding: 0 0 0 3px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--muted);
+  opacity: 0.75;
+  letter-spacing: -0.01em;
+  user-select: none;
+  pointer-events: none;
 }
 
 .topbar-meta {
@@ -1414,24 +1462,23 @@ select {
   background: var(--surface);
 }
 
-/* 复写条目容器：头部（阶段）+ IF/THEN 两个 section */
+/* 复写条目容器：头部（阶段）+ IF/THEN 两个 section
+   与其他区块一致：width: 100% 随容器伸缩，不写死宽度 */
 .rewrite-item {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
+  gap: 12px;
+  padding: 14px;
   border: 1px solid var(--rewrite-line);
-  border-radius: var(--r-md);
-  background: var(--surface);
+  border-radius: var(--r-lg);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--rewrite-soft) 100%);
+  box-shadow: var(--sh-1);
 }
 
 .action-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 8px;
-  padding-left: 14px;
-  border-left: 2px solid var(--rewrite-line);
 }
 
 /* 参数条目：两行布局（第二行 desc 占满） */
@@ -1526,35 +1573,98 @@ select {
    ========================================================= */
 
 /* ---------- 条目骨架 ---------- */
+/* 4 个组件用 Grid 强制 4 等分均匀分布，不会换行堆叠：
+   阶段标签 / 阶段选择器 / 条件数 / 动作数 */
 .rewrite-head {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: center;
+  gap: 10px;
+  padding: 4px 2px 6px;
+  border-bottom: 1px dashed var(--rewrite-line);
 }
 
-.rewrite-head .field:first-child {
-  width: 150px;
-  flex: 0 0 auto;
+/* 阶段标签：色块徽标，呼应 request/response 语义 */
+.rewrite-phase-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: var(--r-full);
+  background: var(--rewrite);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  justify-self: start;
+}
+
+.rewrite-phase-tag[data-phase='response'] {
+  background: var(--script);
+}
+
+.rewrite-phase-field {
+  min-width: 0;
+}
+
+.rewrite-phase-field select {
+  min-width: 0;
+  width: 100%;
+}
+
+/* 统计：条件数 / 动作数 */
+.rewrite-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.rewrite-stat:nth-of-type(1) {
+  justify-self: center;
+}
+
+.rewrite-stat:nth-of-type(2) {
+  justify-self: end;
+}
+
+.rewrite-stat strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--rewrite);
+  font-feature-settings: 'tnum';
 }
 
 .rewrite-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
 
+/* IF / THEN 两段用左侧色条区分，视觉锚点更清晰 */
+.rewrite-section.is-if {
+  border-left: 3px solid var(--rewrite);
+}
+
+.rewrite-section.is-then {
+  border-left: 3px solid var(--script);
+}
+
 .rewrite-section-title {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 11px;
+  gap: 8px;
+  font-size: 11.5px;
   font-weight: 700;
   letter-spacing: 0.05em;
-  color: var(--muted);
+  color: var(--text-2);
 }
 
 .rewrite-section-title::after {
@@ -1564,21 +1674,25 @@ select {
   background: var(--line);
 }
 
-/* 步骤序号小徽标：琥珀底，呼应复写区块主题色 */
+/* 步骤徽标：IF / THEN 文本徽标，分别用复写色与脚本色 */
 .step-no {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 24px;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: var(--r-full);
-  background: var(--rewrite-soft);
-  border: 1px solid var(--rewrite-line);
-  color: var(--rewrite);
+  min-width: 34px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-xs);
+  background: var(--rewrite);
+  color: #fff;
   font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+  font-family: var(--mono);
+}
+
+.is-then .step-no {
+  background: var(--script);
 }
 
 .rewrite-foot {
@@ -1703,30 +1817,51 @@ select {
   color: var(--rewrite);
 }
 
-/* 条件行：字段横向排布，可换行（字段数量随条件类型变化） */
+/* 条件行：纵向两段 = 配置栏（.cond-bar）+ 值区域（.cond-value）
+   避免大块 URL 构建器把字段/操作符挤到行首，导致层级混乱 */
 .row.is-cond {
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: var(--surface-2);
 }
 
-.row.is-cond .field {
-  flex: 0 1 auto;
-  min-width: 110px;
+/* 配置栏：字段 / Header / 参数名 / 操作符 / 值类型 / 捕获 / 删除，横向换行
+   字段 flex-grow 等分整行宽度：无论区块多宽，几个组件始终均匀铺满一行，
+   窄屏放不下时自动换行，换行后各字段仍拉伸填满所在行 */
+.cond-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
 }
 
-.row.is-cond .field.grow {
-  flex: 1 1 200px;
+.cond-bar .field {
+  flex: 1 1 130px;
+  min-width: 0;
 }
 
-.row.is-cond .field .field,
-.row.is-cond .field:has(> .composite-input) {
-  flex: 1 1 200px;
+.cond-bar .row-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+/* 值区域：URL 构建器 / 手写正则 / 普通输入，独占一行 */
+.cond-value {
+  width: 100%;
+  min-width: 0;
+}
+
+.cond-value-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--muted);
 }
 
 /* 组合输入框：/ 正则 / 斜杠夹住输入框 */
@@ -1743,7 +1878,7 @@ select {
   border: 1px solid var(--line-2);
   background: var(--surface-3);
   color: var(--muted);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: var(--mono);
   font-size: 12px;
   user-select: none;
 }
@@ -1780,7 +1915,70 @@ select {
 .flag-group .btn-xs {
   min-width: 24px;
   padding: 2px 0;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: var(--mono);
+}
+
+/* ---------- URL 构建器：协议 / 端口 / 主机 / 路径 / 查询
+   用 6 列网格收成 2 行（协议+端口+主机 / 路径+查询），
+   配置栏 + 值区域分离后不再撑爆条件行 ---------- */
+.url-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--rewrite-line);
+  border-radius: var(--r-sm);
+  background: var(--rewrite-soft);
+}
+
+.url-builder .grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+}
+
+.url-builder .col-2 {
+  grid-column: span 2;
+}
+
+.url-builder .col-3 {
+  grid-column: span 3;
+}
+
+.url-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.url-foot .flag-group {
+  margin-left: 0;
+}
+
+.url-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.url-check input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: var(--rewrite);
+}
+
+.url-mode-btn {
+  margin-left: auto;
 }
 
 /* ---------- Action 卡片 ---------- */
@@ -1814,7 +2012,7 @@ select {
   border: 1px solid var(--line);
   border-radius: var(--r-xs);
   background: var(--surface-3);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: var(--mono);
   font-size: 11px;
   line-height: 1.5;
   color: var(--text-2);
@@ -2132,12 +2330,16 @@ select {
   border-radius: var(--r-md);
   background: var(--code-bg);
   color: var(--code-text);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 12px;
+  font-family: var(--mono);
+  font-size: 13px;
   line-height: 1.75;
   tab-size: 2;
   white-space: pre;
   word-break: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
 }
 
 .code[hidden] {
@@ -2379,11 +2581,16 @@ select {
   }
 
   .app.is-preview-collapsed {
+    grid-template-columns: 240px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) var(--preview-bar);
   }
 
   /* 只改列宽，与上面改行高的折叠态互不冲突 */
   .app.is-side-collapsed {
+    grid-template-columns: var(--sidebar-bar) minmax(0, 1fr);
+  }
+
+  .app.is-side-collapsed.is-preview-collapsed {
     grid-template-columns: var(--sidebar-bar) minmax(0, 1fr);
   }
 
@@ -2427,6 +2634,13 @@ select {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto auto;
     height: auto;
+  }
+
+  /* 折叠态必须显式覆盖基础规则的多列 columns，否则 areas/columns 不匹配导致 workspace 被挤到 268px */
+  .app.is-preview-collapsed,
+  .app.is-side-collapsed,
+  .app.is-side-collapsed.is-preview-collapsed {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar {
@@ -2491,23 +2705,46 @@ select {
     justify-content: flex-start;
   }
 
-  /* 复写：窄屏时条件行竖排，Action 签名换行展示 */
-  .row.is-cond,
+  /* 复写：窄屏时配置栏字段竖排，URL 构建器网格降为 2 列 */
+  .cond-bar,
   .action-head {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .row.is-cond .field,
-  .row.is-cond .field.grow,
+  .cond-bar .field,
+  .cond-bar .row-actions,
   .action-head .field {
+    flex: 0 0 auto;
     min-width: 0;
     width: 100%;
+  }
+
+  .cond-bar .row-actions {
+    margin-left: 0;
   }
 
   .action-sig {
     white-space: normal;
     word-break: break-all;
+  }
+
+  /* URL 构建器：6 列 → 2 列，col-2/col-3 全部跨行 */
+  .url-builder .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .url-builder .col-2,
+  .url-builder .col-3 {
+    grid-column: 1 / -1;
+  }
+
+  /* 复写头部保持 4 列：workspace 修复后有足够宽度，不需要降级 */
+  .rewrite-stat:nth-of-type(1) {
+    justify-self: start;
+  }
+  .rewrite-stat:nth-of-type(2) {
+    justify-self: end;
   }
 
   .cond-group .cond-group {

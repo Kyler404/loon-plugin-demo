@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Loon Plugin Studio · 插件可视化工作台</title>
-    <link rel="stylesheet" href="./styles.css?v=20260903-v2" />
+    <link rel="stylesheet" href="./styles.css?v=20260904-v15" />
   </head>
   <body>
     <div class="app" id="app">
@@ -45,8 +45,11 @@
       <main class="workspace">
         <header class="topbar">
           <div class="topbar-left">
-            <span class="eyebrow">插件编辑器</span>
-            <input id="nameInput" class="page-title" type="text" placeholder="未命名插件" aria-label="插件名称" />
+            <span class="eyebrow">文件名 · File name</span>
+            <div class="filename-input">
+              <input id="nameInput" class="page-title" type="text" placeholder="demo" aria-label="插件文件名（不含 .plugin 后缀）" spellcheck="false" />
+              <span class="filename-suffix" aria-hidden="true">.plugin</span>
+            </div>
             <div class="topbar-meta">
               <span id="blockCount">0 个区块</span>
               <span class="sep">·</span>
@@ -103,6 +106,6 @@
 
     <div id="toast" class="toast" hidden></div>
 
-    <script src="./app.js?v=20260903-v3"></script>
+    <script src="./app.js?v=20260904-v14"></script>
   </body>
 </html>

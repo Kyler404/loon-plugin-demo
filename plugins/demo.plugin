@@ -1,30 +1,33 @@
-#!name=Demo Plugin
-#!desc=一个用于演示的 Loon 插件：8 个区块 + Loon 3.5.1 新语法
-#!icon=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png
-#!author=kyler404
-#!homepage=https://github.com/kyler404/loon-plugin-demo
-#!tag=Proxy
-#!system=iOS,iPadOS,tvOS,macOS
+#!name = Demo Plugin
+#!desc = 展示插件信息和用户参数
+#!author = kyler404
+#!homepage = https://github.com/kyler404/loon-plugin-demo
+#!icon = https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png
+#!system = iOS,iPadOS,tvOS,macOS
+#!system_version = 15
+#!loon_version = 3.5.1(978)
+#!tag = 示例,工具
+#!type = normal
 
 [Argument]
-token = input, "默认令牌", tag=令牌, desc=用于脚本鉴权的令牌
+name = input,"Loon",tag=名称,desc=输入一个名称
+region = select,"CN","US","JP",tag=地区
+enabled = switch,true,tag=启用
 
 [General]
-bypass-tun = 192.168.0.0/16, 10.0.0.0/8
+bypass-tun =
+skip-proxy =
+real-ip =
+dns-server =
 
 [Rule]
-DOMAIN-SUFFIX,example.com,DIRECT
-AND,((DOMAIN-KEYWORD,ads),(USER-AGENT,*AdBot*)),REJECT
 
 [Rewrite]
-request if ${url} ~= /^https:\/\/api\.example\.com/ && ${request.method} == "POST" then request.header.set("X-Loon", "true") | request.header.del("Cookie")
-response if ${url} ~= /^https:\/\/api\.example\.com\/profile$/ && ${response.status} == 200 && ${response.header['Content-Type']} ~= /^application\/json(?:;|$)/i then response.json.replace("data.vip", true) | response.header.set("X-Rewritten", "true")
 
 [Host]
-example.com = server:223.5.5.5
 
 [Script]
-response if ${url} ~= /^https?:\/\/api\.example\.com\/v1\/user/i then script("https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js", {${token}}) with tag="DemoUser", timeout=10, requires_body=true
+http-response ^https?:\/\/example\.com\/conf\/server-mapping script-path=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js,requires-body=true,tag=移除广告,argument=[{name},{region},{enabled}]
 
 [Mitm]
-hostname = api.example.com, *.example.cn
+hostname = example.com
