@@ -5,7 +5,7 @@
 #!icon=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png
 #!system=iOS,iPadOS,tvOS,macOS
 #!system_version=15
-#!loon_version=3.5.1(978)
+#!loon_version=3.4.0(962)
 #!tag=示例,工具
 #!type=normal
 
@@ -28,4 +28,4 @@ response if ${url} ~= /^http:\/\/app2025\.xuanyou168\.com:8099\/user\/getUserDat
 [Host]
 
 [Script]
-http-response ^http:\/\/app2025\.xuanyou168\.com:8099\/user\/getUserData script-path=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js,requires-body=true,tag=VIP解锁,argument=[{name},{region},{enabled}]
+http-response ^http:\/\/app2025\.xuanyou168\.com:8099\/user\/getUserData script-path=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/scripts/demo.js,requires-body=true,tag=VIP解锁,argument=[{name},{region},{enabled}]
