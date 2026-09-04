@@ -2,17 +2,12 @@
 #!desc=展示插件信息和用户参数
 #!author=kyler404
 #!homepage=https://github.com/kyler404/loon-plugin-demo
-#!icon=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png
+#!icon=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/assets/icon.png
 #!system=iOS,iPadOS,tvOS,macOS
 #!system_version=15
 #!loon_version=3.4.0(962)
 #!tag=示例,工具
 #!type=normal
-
-[Argument]
-name = input,"Loon",tag=名称,desc=输入一个名称
-region = select,"CN","US","JP",tag=地区
-enabled = switch,true,tag=启用
 
 [General]
 bypass-tun = 
@@ -23,7 +18,7 @@ dns-server =
 [Rule]
 
 [Rewrite]
-response if ${url} ~= /^http:\/\/app2025\.xuanyou168\.com:8099\/user\/getUserData/ then response.body.replace(/"vipState":\s*0/, "\"vipState\":1")
+response if ${url} ~= /^https:\/\/api\.example\.com/ && ${request.method} == "POST" then response.body.replace(/"enabled":\s*false/, "\"enabled\":true")
 
 [Host]
 

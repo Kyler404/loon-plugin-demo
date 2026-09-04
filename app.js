@@ -510,7 +510,7 @@ const BLOCK_TEMPLATES = {
       icon: 'https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png',
       system: 'iOS,iPadOS,tvOS,macOS',
       systemVersion: '15',
-      loonVersion: '3.5.1(978)',
+      loonVersion: '3.4.0(962)',
       tag: '示例,工具',
       pluginType: 'normal'
     }
@@ -2138,7 +2138,7 @@ function renderDetails(block) {
       </div>
       <div class="field">
         <label>最低 Loon 版本 · #!loon_version</label>
-        <input type="text" data-field="loonVersion" value="${escapeHtml(d.loonVersion || '')}" placeholder="如 3.5.1(978)" />
+        <input type="text" data-field="loonVersion" value="${escapeHtml(d.loonVersion || '')}" placeholder="如 3.4.0(962)" />
       </div>
     </div>`;
 }
