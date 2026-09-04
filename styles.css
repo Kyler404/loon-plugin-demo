@@ -1468,6 +1468,9 @@ select {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* 供下方 URL 构建器按条目实际宽度降级（视口宽度不代表条目宽度） */
+  container-type: inline-size;
+  container-name: rewrite;
   padding: 14px;
   border: 1px solid var(--rewrite-line);
   border-radius: var(--r-lg);
@@ -1629,11 +1632,13 @@ select {
   white-space: nowrap;
 }
 
-.rewrite-stat:nth-of-type(1) {
+/* 注意：阶段徽标本身也是 <span>，用 nth-of-type 会被它抢走序号导致
+   对齐失效（「N 动作」被拉伸成整列宽）。改用语义 class 更稳 */
+.rewrite-stat.is-cond {
   justify-self: center;
 }
 
-.rewrite-stat:nth-of-type(2) {
+.rewrite-stat.is-action {
   justify-self: end;
 }
 
@@ -1828,6 +1833,10 @@ select {
 .row.is-cond {
   display: flex;
   flex-direction: column;
+  /* 关键：基础 .row 的 align-items: end 是给横向网格用的；
+     这里是纵向 flex，交叉轴 = 横向，end 会让子项收成内容宽度并贴右。
+     显式拉伸，配置栏 / 值区域才能铺满整行 */
+  align-items: stretch;
   gap: 10px;
   padding: 10px;
   border: 1px solid var(--line);
@@ -1835,24 +1844,26 @@ select {
   background: var(--surface-2);
 }
 
-/* 配置栏：字段 / Header / 参数名 / 操作符 / 值类型 / 捕获 / 删除，横向换行
-   字段 flex-grow 等分整行宽度：无论区块多宽，几个组件始终均匀铺满一行，
-   窄屏放不下时自动换行，换行后各字段仍拉伸填满所在行 */
+/* 配置栏：字段 / Header / 参数名 / 操作符 / 值类型 / 捕获 / 删除
+   规则：字段一律 flex: 1 1 0 等分整行，nowrap 永不换行，
+   删除按钮固定 32px 钉在最右。这样无论区块多宽，几个组件始终
+   同一行、同宽度、左右顶格 —— 不会出现「最后一个字段被甩到第二行
+   拉伸成一条」或「挤在右侧」的情况 */
 .cond-bar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: flex-end;
   gap: 8px;
 }
 
 .cond-bar .field {
-  flex: 1 1 130px;
+  flex: 1 1 0;
   min-width: 0;
 }
 
 .cond-bar .row-actions {
-  flex: 0 0 auto;
-  margin-left: auto;
+  flex: 0 0 var(--ctl-sm);
+  justify-content: center;
 }
 
 /* 值区域：URL 构建器 / 手写正则 / 普通输入，独占一行 */
@@ -1950,6 +1961,21 @@ select {
 
 .url-builder .col-3 {
   grid-column: span 3;
+}
+
+/* 条目本身变窄（右侧预览展开时 1280 屏会压到 484px）时，6 列网格会把
+   输入框挤到 110px 以内，这里按容器宽度降级：各字段整行铺开。
+   阈值按容器内容盒算（条目 1366 屏内容宽 540 / 1280 屏 454），
+   取 500px：1366 仍保持 6 列两行，只有更挤时才降级 */
+@container rewrite (max-width: 500px) {
+  .url-builder .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .url-builder .col-2,
+  .url-builder .col-3 {
+    grid-column: 1 / -1;
+  }
 }
 
 .url-foot {
@@ -2712,8 +2738,14 @@ select {
   }
 
   /* 复写：窄屏时配置栏字段竖排，URL 构建器网格降为 2 列 */
-  .cond-bar,
   .action-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* 配置栏：窄屏横向塞不下，改为纵向堆叠铺满宽度 */
+  .cond-bar {
+    flex-wrap: wrap;
     flex-direction: column;
     align-items: stretch;
   }
@@ -2727,7 +2759,8 @@ select {
   }
 
   .cond-bar .row-actions {
-    margin-left: 0;
+    justify-content: flex-end;
+    margin-top: 2px;
   }
 
   .action-sig {
@@ -2746,11 +2779,8 @@ select {
   }
 
   /* 复写头部保持 4 列：workspace 修复后有足够宽度，不需要降级 */
-  .rewrite-stat:nth-of-type(1) {
+  .rewrite-stat.is-cond {
     justify-self: start;
-  }
-  .rewrite-stat:nth-of-type(2) {
-    justify-self: end;
   }
 
   .cond-group .cond-group {

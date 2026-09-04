@@ -2514,7 +2514,7 @@ function renderRewriteCond(block, idx, cond, path, phase) {
         </div>
         ${
           isRegex
-            ? `<div class="field"><label>捕获 as（可选）</label><input type="text" data-field="cond-capture" value="${escapeHtml(
+            ? `<div class="field"><label>捕获 as</label><input type="text" data-field="cond-capture" value="${escapeHtml(
                 cond.captureName || ''
               )}" placeholder="item" /></div>`
             : ''
@@ -2628,8 +2628,8 @@ function renderRewriteItem(block, item, idx) {
           <label>阶段</label>
           <select data-field="phase">${optionsHtml(REWRITE_PHASES, phase)}</select>
         </div>
-        <span class="rewrite-stat"><strong>${condCount}</strong> 条件</span>
-        <span class="rewrite-stat"><strong>${actions.length}</strong> 动作</span>
+        <span class="rewrite-stat is-cond"><strong>${condCount}</strong> 条件</span>
+        <span class="rewrite-stat is-action"><strong>${actions.length}</strong> 动作</span>
       </div>
       <div class="rewrite-section is-if">
         <div class="rewrite-section-title"><span class="step-no">IF</span> 匹配条件</div>
