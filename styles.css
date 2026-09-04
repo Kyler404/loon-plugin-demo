@@ -1574,30 +1574,34 @@ select {
 
 /* ---------- 条目骨架 ---------- */
 /* 4 个组件用 Grid 强制 4 等分均匀分布，不会换行堆叠：
-   阶段标签 / 阶段选择器 / 条件数 / 动作数 */
+   阶段标签 / 阶段选择器 / 条件数 / 动作数
+   align-items: end 让无标签的徽标/统计与阶段选择器底边对齐，
+   再用 margin/padding 做光学居中，整排看起来在同一水平线上 */
 .rewrite-head {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  align-items: center;
+  align-items: end;
   gap: 10px;
   padding: 4px 2px 6px;
   border-bottom: 1px dashed var(--rewrite-line);
 }
 
-/* 阶段标签：色块徽标，呼应 request/response 语义 */
+/* 阶段标签：色块徽标，呼应 request/response 语义。
+   高度 26px + 底部留 6px = 相对 38px 的选择器光学居中 */
 .rewrite-phase-tag {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 22px;
-  padding: 0 10px;
+  height: 26px;
+  padding: 0 12px;
   border-radius: var(--r-full);
   background: var(--rewrite);
   color: #fff;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 700;
   letter-spacing: 0.04em;
   justify-self: start;
+  margin-bottom: 6px;
 }
 
 .rewrite-phase-tag[data-phase='response'] {
@@ -1613,11 +1617,13 @@ select {
   width: 100%;
 }
 
-/* 统计：条件数 / 动作数 */
+/* 统计：条件数 / 动作数。
+   文字约 17px 高，底部留 10px 与 38px 选择器光学居中 */
 .rewrite-stat {
   display: inline-flex;
   align-items: baseline;
   gap: 4px;
+  padding-bottom: 10px;
   font-size: 11.5px;
   color: var(--muted);
   white-space: nowrap;
