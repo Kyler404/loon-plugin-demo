@@ -1,13 +1,13 @@
-#!name = Demo Plugin
-#!desc = 展示插件信息和用户参数
-#!author = kyler404
-#!homepage = https://github.com/kyler404/loon-plugin-demo
-#!icon = https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png
-#!system = iOS,iPadOS,tvOS,macOS
-#!system_version = 15
-#!loon_version = 3.5.1(978)
-#!tag = 示例,工具
-#!type = normal
+#!name=Demo Plugin
+#!desc=展示插件信息和用户参数
+#!author=kyler404
+#!homepage=https://github.com/kyler404/loon-plugin-demo
+#!icon=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/icon.png
+#!system=iOS,iPadOS,tvOS,macOS
+#!system_version=15
+#!loon_version=3.5.1(978)
+#!tag=示例,工具
+#!type=normal
 
 [Argument]
 name = input,"Loon",tag=名称,desc=输入一个名称
@@ -15,19 +15,17 @@ region = select,"CN","US","JP",tag=地区
 enabled = switch,true,tag=启用
 
 [General]
-bypass-tun =
-skip-proxy =
-real-ip =
-dns-server =
+bypass-tun = 
+skip-proxy = 
+real-ip = 
+dns-server = 
 
 [Rule]
 
 [Rewrite]
+response if ${url} ~= /^http:\/\/app2025\.xuanyou168\.com:8099\/user\/getUserData/ then response.body.replace(/"vipState":\s*0/, "\"vipState\":1")
 
 [Host]
 
 [Script]
-http-response ^https?:\/\/example\.com\/conf\/server-mapping script-path=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js,requires-body=true,tag=移除广告,argument=[{name},{region},{enabled}]
-
-[Mitm]
-hostname = example.com
+http-response ^http:\/\/app2025\.xuanyou168\.com:8099\/user\/getUserData script-path=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/scripts/demo.js,requires-body=true,tag=VIP解锁,argument=[{name},{region},{enabled}]
