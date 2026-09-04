@@ -16,4 +16,4 @@ let body = $response.body
 
 body = body.replace(/"userPhone":"1[3-9]\d{9}"/g, () => {
   return `"userPhone":"${getRandomPhone()}"`
-});$done({ body })
+});$done({body});
