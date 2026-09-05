@@ -2,7 +2,7 @@
 #!desc=展示插件信息和用户参数
 #!author=kyler404
 #!homepage=https://github.com/kyler404/loon-plugin-demo
-#!icon=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/assets/IMG_9862.webp
+#!icon=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/assets/icon.webp
 #!system=iOS,iPadOS,tvOS,macOS
 #!system_version=15
 #!loon_version=3.4.0(962)
