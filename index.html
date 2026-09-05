@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Loon Plugin Studio · 插件可视化工作台</title>
-    <link rel="stylesheet" href="./styles.css?v=20260904-v17" />
+    <link rel="stylesheet" href="./styles.css?v=20260904-v18" />
   </head>
   <body>
     <div class="app" id="app">
@@ -31,6 +31,16 @@
           <div id="pluginList" class="plugin-list"></div>
         </div>
 
+        <!-- ============ 本地文件（File System Access API） ============ -->
+        <div class="side-section">
+          <div class="side-label">
+            本地文件 <span id="localCount" class="count">0</span>
+            <button id="localRefreshBtn" class="side-action" type="button" title="重新读取目录" hidden>刷新</button>
+            <button id="localDisconnectBtn" class="side-action" type="button" title="断开本地目录" hidden>断开</button>
+          </div>
+          <div id="localList" class="plugin-list"></div>
+        </div>
+
         <div class="side-foot">
           <div id="saveHint" class="save-hint">草稿自动保存在本机浏览器</div>
           <button id="resetBtn" class="btn btn-ghost btn-block btn-sm">恢复示例插件</button>
@@ -45,7 +55,7 @@
       <main class="workspace">
         <header class="topbar">
           <div class="topbar-left">
-            <span class="eyebrow">文件名 · File name</span>
+            <span class="eyebrow" id="fileNameLabel">文件名 · File name</span>
             <div class="filename-input">
               <input id="nameInput" class="page-title" type="text" placeholder="demo" aria-label="插件文件名（不含 .plugin 后缀）" spellcheck="false" />
               <span class="filename-suffix" aria-hidden="true">.plugin</span>
@@ -58,7 +68,7 @@
           </div>
 
           <div class="topbar-right">
-            <div class="anchor">
+            <div class="anchor" id="addBlockAnchor">
               <button id="addBlockBtn" class="btn btn-soft" aria-haspopup="true" aria-expanded="false">
                 <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg> 添加区块
               </button>
@@ -68,6 +78,46 @@
         </header>
 
         <div id="builderCanvas" class="canvas"></div>
+
+        <!-- ============ 本地文件编辑视图（选中本地文件时显示） ============ -->
+        <section id="localEditor" class="local-editor" hidden>
+          <div class="local-head">
+            <div class="local-head-text">
+              <span class="eyebrow">本地文件 · 直接读写磁盘</span>
+              <h2 class="local-title" id="localFileName">—</h2>
+              <div class="local-meta">
+                <span id="localPath" class="local-path">—</span>
+                <span class="sep">·</span>
+                <span id="localStatus" class="local-status">—</span>
+              </div>
+            </div>
+            <div class="local-actions">
+              <button id="localReloadBtn" class="btn btn-sm" type="button">放弃修改并重新读取</button>
+              <button id="localSaveBtn" class="btn btn-primary btn-sm" type="button" disabled>
+                <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14" /></svg><span>保存</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="local-panes">
+            <div class="local-pane">
+              <div class="pane-head">
+                <span class="pane-badge">PLUGIN</span>
+                <span class="pane-name" id="localPluginName">—</span>
+                <span class="pane-hint">插件配置文本，保存即写回原文件</span>
+              </div>
+              <textarea id="localPluginText" class="code-editor" spellcheck="false" aria-label="插件文件内容"></textarea>
+            </div>
+            <div class="local-pane">
+              <div class="pane-head">
+                <span class="pane-badge is-js">JS</span>
+                <span class="pane-name" id="localJsName">—</span>
+                <span class="pane-hint">同名脚本文件，保存即写回原文件</span>
+              </div>
+              <textarea id="localJsText" class="code-editor" spellcheck="false" aria-label="脚本文件内容"></textarea>
+            </div>
+          </div>
+        </section>
       </main>
 
       <!-- ============ 右侧 / 底部：实时预览（可折叠） ============ -->
@@ -106,6 +156,6 @@
 
     <div id="toast" class="toast" hidden></div>
 
-    <script src="./app.js?v=20260904-v14"></script>
+    <script src="./app.js?v=20260904-v18"></script>
   </body>
 </html>

@@ -577,7 +577,20 @@ const state = {
   dragId: null,
   /* 界面偏好：collapsed=预览面板折叠；sideCollapsed=侧栏折叠；w/h 分别记住宽屏与窄屏下的预览尺寸 */
   ui: { collapsed: false, sideCollapsed: false, w: 420, h: 320 },
-  view: { text: '', scripts: [], issues: [] }
+  view: { text: '', scripts: [], issues: [] },
+  /* 两种工作对象：
+     workspace = 浏览器草稿，走区块构建画布；
+     local     = 磁盘上的 .plugin / .js，走纯文本编辑 + 写回原文件 */
+  mode: 'workspace',
+  local: {
+    /* idle=还没连 | unsupported=浏览器不支持 | unauthorized=需要重新授权
+       | ready=已连上 | error=读取失败 */
+    status: 'idle',
+    message: '',
+    dirs: { plugin: null, script: null },
+    files: [],
+    selectedId: null
+  }
 };
 
 /** 预览面板最小/最大尺寸（px） */
@@ -680,6 +693,25 @@ const el = {
   issueCount: $('#issueCount'),
   saveHint: $('#saveHint'),
   toast: $('#toast'),
+  /* 顶部：文件名标签随模式切换（文件名 / 本地文件），添加区块只在草稿模式可用 */
+  fileNameLabel: $('#fileNameLabel'),
+  addBlockAnchor: $('#addBlockAnchor'),
+  /* 侧栏：本地文件分组 */
+  localList: $('#localList'),
+  localCount: $('#localCount'),
+  localRefreshBtn: $('#localRefreshBtn'),
+  localDisconnectBtn: $('#localDisconnectBtn'),
+  /* 工作区：本地文件编辑视图 */
+  localEditor: $('#localEditor'),
+  localFileName: $('#localFileName'),
+  localPath: $('#localPath'),
+  localStatus: $('#localStatus'),
+  localReloadBtn: $('#localReloadBtn'),
+  localSaveBtn: $('#localSaveBtn'),
+  localPluginName: $('#localPluginName'),
+  localJsName: $('#localJsName'),
+  localPluginText: $('#localPluginText'),
+  localJsText: $('#localJsText'),
   /* 面板折叠 */
   app: $('#app'),
   sidebar: $('#sidebar'),
@@ -864,6 +896,312 @@ function loadState() {
       }
     });
   });
+}
+
+/* ========================= 本地文件（File System Access API） =========================
+   目标：把本工作台从「浏览器草稿 + 下载导出」升级成真正的本地工作台 ——
+   直接读写磁盘上的 .plugin 与同名 .js，改完点保存就写回原文件。
+
+   限制与应对：
+   - 只有 Chromium 系（Chrome / Edge）支持 showDirectoryPicker；Safari / Firefox 给明确提示
+   - 目录句柄不能存 localStorage（不可结构化克隆到那里），只能存 IndexedDB
+   - requestPermission 必须由用户手势触发，所以启动时只 query 不 request，
+     需要授权时让侧栏出现「重新授权」按钮
+   ==================================================================================== */
+
+const FS_OK = typeof window.showDirectoryPicker === 'function';
+const FS_DB = 'loon-plugin-studio-fs';
+const FS_STORE = 'dirs';
+
+/** 极简 IndexedDB 封装（只存取两个目录句柄，不引第三方库） */
+function fsOpenDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(FS_DB, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(FS_STORE)) db.createObjectStore(FS_STORE);
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function fsTx(mode, run) {
+  return fsOpenDb().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(FS_STORE, mode);
+        let out;
+        try {
+          out = run(tx.objectStore(FS_STORE));
+        } catch (err) {
+          reject(err);
+          return;
+        }
+        tx.oncomplete = () => resolve(out && out.result !== undefined ? out.result : out);
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      })
+  );
+}
+
+const fsGet = (key) => fsTx('readonly', (store) => store.get(key));
+const fsSet = (key, value) => fsTx('readwrite', (store) => store.put(value, key));
+const fsClear = () => fsTx('readwrite', (store) => store.clear());
+
+/** 查询（必要时申请）目录读写权限；requestPermission 必须在用户手势里调用 */
+async function ensureDirPermission(handle, canRequest) {
+  if (!handle) return false;
+  const opts = { mode: 'readwrite' };
+  let perm = await handle.queryPermission(opts).catch(() => 'prompt');
+  if (perm === 'granted') return true;
+  if (perm === 'prompt' && canRequest) {
+    perm = await handle.requestPermission(opts).catch(() => 'denied');
+  }
+  return perm === 'granted';
+}
+
+/** 列目录里的指定后缀文件（只取文件，忽略子目录） */
+async function listDirFiles(dir, ext) {
+  const out = [];
+  if (!dir || typeof dir.entries !== 'function') return out;
+  for await (const [name, handle] of dir.entries()) {
+    if (handle.kind !== 'file') continue;
+    if (!name.toLowerCase().endsWith(ext)) continue;
+    out.push({ name, handle });
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+}
+
+const baseName = (name) => String(name).replace(/\.(plugin|js)$/i, '');
+
+/** 重新枚举两个目录；已加载的内容和「未保存」状态按文件名保留，不打断编辑 */
+async function refreshLocalFiles() {
+  const { plugin, script } = state.local.dirs;
+  if (!plugin || !script) {
+    state.local.status = 'unauthorized';
+    return;
+  }
+  const ok = (await ensureDirPermission(plugin, false)) && (await ensureDirPermission(script, false));
+  if (!ok) {
+    state.local.status = 'unauthorized';
+    state.local.files = [];
+    return;
+  }
+  const [pluginFiles, scriptFiles] = await Promise.all([listDirFiles(plugin, '.plugin'), listDirFiles(script, '.js')]);
+  const jsMap = new Map(scriptFiles.map((f) => [baseName(f.name), f]));
+  const prev = new Map(state.local.files.map((f) => [f.base, f]));
+
+  state.local.files = pluginFiles.map((file) => {
+    const base = baseName(file.name);
+    const js = jsMap.get(base) || null;
+    const old = prev.get(base);
+    return {
+      id: `local:${base}`,
+      base,
+      pluginName: file.name,
+      jsName: js ? js.name : `${base}.js`,
+      pluginHandle: file.handle,
+      jsHandle: js ? js.handle : null,
+      /* 文本：优先沿用内存里的（可能含未保存改动），否则下一步按需读取 */
+      pluginText: old && old.pluginText != null ? old.pluginText : null,
+      jsText: old && old.jsText != null ? old.jsText : null,
+      savedPlugin: old ? old.savedPlugin : null,
+      savedJs: old ? old.savedJs : null,
+      loaded: old ? old.loaded : false,
+      dirty: old ? old.dirty : false
+    };
+  });
+  state.local.status = 'ready';
+  state.local.message = '';
+
+  /* 选中的文件可能在磁盘上被删了 → 退回草稿模式，避免卡在空白编辑器 */
+  if (state.local.selectedId && !state.local.files.some((f) => f.id === state.local.selectedId)) {
+    state.local.selectedId = null;
+    if (state.mode === 'local') state.mode = 'workspace';
+  }
+}
+
+function currentLocal() {
+  return state.local.files.find((f) => f.id === state.local.selectedId) || null;
+}
+
+/** 读取文件内容（首次选中或点「重新读取」时才读，目录大也不卡） */
+async function loadLocalFile(entry, force) {
+  if (!entry) return;
+  if (entry.loaded && !force) return;
+  const [pluginText, jsText] = await Promise.all([
+    entry.pluginHandle.getFile().then((f) => f.text()).catch(() => ''),
+    entry.jsHandle ? entry.jsHandle.getFile().then((f) => f.text()).catch(() => '') : Promise.resolve('')
+  ]);
+  entry.pluginText = pluginText;
+  entry.jsText = jsText;
+  entry.savedPlugin = pluginText;
+  entry.savedJs = jsText;
+  entry.loaded = true;
+  entry.dirty = false;
+}
+
+async function writeIntoDir(dir, name, text) {
+  const handle = await dir.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(text);
+  await writable.close();
+}
+
+/** 保存：把改动写回原文件；没有同名 .js 但填了内容时自动创建 */
+async function saveLocalFile() {
+  const entry = currentLocal();
+  if (!entry) return;
+  const { plugin, script } = state.local.dirs;
+  if (!(await ensureDirPermission(plugin, true)) || !(await ensureDirPermission(script, true))) {
+    state.local.status = 'unauthorized';
+    renderSidebar();
+    toast('目录权限已失效，请在左侧点「重新授权」', 'error');
+    return;
+  }
+  const wantJs = String(entry.jsText || '').trim().length > 0;
+  try {
+    const tasks = [writeIntoDir(plugin, entry.pluginName, entry.pluginText || '')];
+    if (wantJs) tasks.push(writeIntoDir(script, entry.jsName, entry.jsText || ''));
+    await Promise.all(tasks);
+    /* 重新枚举：新建的 .js 才能在后续保存时拿到句柄 */
+    await refreshLocalFiles();
+    const fresh = state.local.files.find((f) => f.id === entry.id);
+    if (fresh) {
+      fresh.pluginText = entry.pluginText || '';
+      fresh.jsText = entry.jsText || '';
+      fresh.savedPlugin = entry.pluginText || '';
+      fresh.savedJs = entry.jsText || '';
+      fresh.loaded = true;
+      fresh.dirty = false;
+    }
+    toast(`已保存 ${entry.pluginName}${wantJs ? ` + ${entry.jsName}` : ''}`, 'success');
+    renderAll();
+  } catch (err) {
+    toast(`保存失败：${(err && err.message) || err}`, 'error');
+  }
+}
+
+/** 首次连接：依次选 .plugin 目录和 .js 目录，句柄存 IndexedDB 便于下次恢复 */
+async function connectLocalDirs() {
+  if (!FS_OK) {
+    toast('当前浏览器不支持本地目录访问，请用 Chrome / Edge 打开', 'error');
+    return;
+  }
+  try {
+    /* 连续两次 showDirectoryPicker：必须由同一个用户手势串起来 */
+    const pluginDir = await window.showDirectoryPicker({ id: 'loon-plugin-dir', mode: 'readwrite' });
+    const scriptDir = await window.showDirectoryPicker({ id: 'loon-script-dir', mode: 'readwrite' });
+    state.local.dirs = { plugin: pluginDir, script: scriptDir };
+    /* 记住句柄方便下次恢复；存不下（隐私模式等）只影响下次自动连接，本次照常用 */
+    await Promise.all([fsSet('pluginDir', pluginDir), fsSet('scriptDir', scriptDir)]).catch(() => {});
+    await refreshLocalFiles();
+    const count = state.local.files.length;
+    toast(count ? `已连接本地目录，读到 ${count} 个 .plugin 文件` : '已连接本地目录，但该目录下还没有 .plugin 文件', 'success');
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      toast('已取消选择目录', 'info');
+      return;
+    }
+    state.local.status = 'error';
+    state.local.message = (err && err.message) || String(err);
+    toast(`连接失败：${state.local.message}`, 'error');
+  }
+  renderAll();
+}
+
+/** 句柄已在 IndexedDB 里，但权限需要用户手势才能重新申请 */
+async function reauthorizeLocalDirs() {
+  const { plugin, script } = state.local.dirs;
+  if (!plugin || !script) {
+    await connectLocalDirs();
+    return;
+  }
+  const ok = (await ensureDirPermission(plugin, true)) && (await ensureDirPermission(script, true));
+  if (!ok) {
+    toast('未获得目录权限', 'warn');
+    renderSidebar();
+    return;
+  }
+  await refreshLocalFiles();
+  toast(`已恢复本地目录，读到 ${state.local.files.length} 个 .plugin 文件`, 'success');
+  renderAll();
+}
+
+async function disconnectLocalDirs() {
+  state.local.dirs = { plugin: null, script: null };
+  state.local.files = [];
+  state.local.selectedId = null;
+  state.local.status = 'idle';
+  state.local.message = '';
+  if (state.mode === 'local') state.mode = 'workspace';
+  await fsClear().catch(() => {});
+  toast('已断开本地目录', 'info');
+  renderAll();
+}
+
+/** 启动时恢复：只查权限不申请，缺权限就交给侧栏的「重新授权」按钮 */
+async function restoreLocalDirs() {
+  if (!FS_OK) {
+    state.local.status = 'unsupported';
+    renderSidebar();
+    return;
+  }
+  let pluginDir = null;
+  let scriptDir = null;
+  try {
+    pluginDir = await fsGet('pluginDir');
+    scriptDir = await fsGet('scriptDir');
+  } catch (err) {
+    /* IndexedDB 不可用（隐私模式等）→ 保持未连接，不影响草稿模式 */
+  }
+  /* 句柄可能已失效（目录被删、权限被撤、IndexedDB 里存的不是有效句柄），
+     先做一次形状校验，拿不住就当没连过，别让启动流程抛异常 */
+  const usable = (h) => h && typeof h.queryPermission === 'function' && typeof h.entries === 'function';
+  if (!usable(pluginDir) || !usable(scriptDir)) {
+    state.local.status = 'idle';
+    if (pluginDir || scriptDir) await fsClear().catch(() => {});
+    renderSidebar();
+    return;
+  }
+  state.local.dirs = { plugin: pluginDir, script: scriptDir };
+  const [permPlugin, permScript] = await Promise.all([
+    pluginDir.queryPermission({ mode: 'readwrite' }).catch(() => 'prompt'),
+    scriptDir.queryPermission({ mode: 'readwrite' }).catch(() => 'prompt')
+  ]);
+  if (permPlugin === 'granted' && permScript === 'granted') {
+    try {
+      await refreshLocalFiles();
+    } catch (err) {
+      state.local.status = 'error';
+      state.local.message = (err && err.message) || String(err);
+    }
+  } else {
+    state.local.status = 'unauthorized';
+  }
+  renderSidebar();
+}
+
+/** 选中本地文件：读内容 → 切到 local 模式（画布让位给编辑器） */
+async function selectLocalFile(id) {
+  const entry = state.local.files.find((f) => f.id === id);
+  if (!entry) return;
+  try {
+    await loadLocalFile(entry);
+  } catch (err) {
+    toast(`读取失败：${(err && err.message) || err}`, 'error');
+    return;
+  }
+  state.local.selectedId = id;
+  state.mode = 'local';
+  renderAll();
+}
+
+/** 回到草稿模式 */
+function backToWorkspace() {
+  state.mode = 'workspace';
+  renderAll();
 }
 
 /* ========================= 插件 / 区块操作 ========================= */
@@ -2023,6 +2361,109 @@ function renderSidebar() {
   el.pluginCount.textContent = String(state.plugins.length);
 }
 
+/* ========================= 渲染：侧栏 · 本地文件 ========================= */
+
+/** 本地文件区：未连接 / 未授权 / 不支持 / 出错 / 空目录 / 文件列表，六种状态各自给明确出口 */
+function renderLocalList() {
+  const local = state.local;
+  el.localCount.textContent = String(local.files.length);
+  const ready = local.status === 'ready';
+  el.localRefreshBtn.hidden = !ready;
+  el.localDisconnectBtn.hidden = !(ready || local.status === 'unauthorized' || local.status === 'error');
+
+  if (local.status === 'unsupported') {
+    el.localList.innerHTML = `
+      <div class="side-empty">
+        <p>当前浏览器不支持 File System Access API，无法直接读写本地目录。请改用 Chrome / Edge 打开本页面。</p>
+        <p class="side-note">草稿模式与导出下载不受影响。</p>
+      </div>`;
+    return;
+  }
+
+  if (local.status === 'idle') {
+    el.localList.innerHTML = `
+      <div class="side-empty">
+        <p>连接本地目录后，这里会列出目录里的 <code>.plugin</code> 文件，并与脚本目录里的同名 <code>.js</code> 配对。</p>
+        <button class="btn btn-soft btn-sm" type="button" data-local-act="connect">选择本地目录</button>
+        <p class="side-note">依次选择 plugins 目录和 scripts 目录；句柄记住后下次自动恢复。</p>
+      </div>`;
+    return;
+  }
+
+  if (local.status === 'unauthorized') {
+    el.localList.innerHTML = `
+      <div class="side-empty">
+        <p>已记住上次选择的目录，但浏览器要求每次打开页面时重新授权。</p>
+        <button class="btn btn-soft btn-sm" type="button" data-local-act="reauthorize">重新授权</button>
+      </div>`;
+    return;
+  }
+
+  if (local.status === 'error') {
+    el.localList.innerHTML = `
+      <div class="side-empty">
+        <p>读取本地目录失败：${escapeHtml(local.message || '未知错误')}</p>
+        <button class="btn btn-soft btn-sm" type="button" data-local-act="reauthorize">重试</button>
+      </div>`;
+    return;
+  }
+
+  if (!local.files.length) {
+    el.localList.innerHTML = `
+      <div class="side-empty">
+        <p>这个目录里还没有 <code>.plugin</code> 文件。</p>
+        <button class="btn btn-ghost btn-sm" type="button" data-local-act="connect">换个目录</button>
+      </div>`;
+    return;
+  }
+
+  el.localList.innerHTML = local.files
+    .map(
+      (file) => `
+      <div class="plugin-item is-local ${file.id === local.selectedId ? 'is-active' : ''}" data-local-id="${escapeHtml(file.id)}" role="button" tabindex="0">
+        <span class="p-name"><span class="p-base">${escapeHtml(file.base)}</span><span class="p-ext">.plugin</span></span>
+        <span class="p-tag">本地</span>
+        ${file.dirty ? '<span class="p-dirty" title="有未保存的修改"></span>' : ''}
+      </div>`
+    )
+    .join('');
+}
+
+/* ========================= 渲染：本地文件编辑视图 ========================= */
+
+function renderLocalEditor() {
+  const entry = currentLocal();
+  if (!entry) {
+    el.localEditor.hidden = true;
+    return;
+  }
+  el.localEditor.hidden = false;
+  el.localFileName.textContent = entry.pluginName;
+  el.localPath.textContent = entry.jsHandle ? `${entry.pluginName} + ${entry.jsName}` : `${entry.pluginName}（脚本目录里还没有 ${entry.jsName}）`;
+  el.localPluginName.textContent = entry.pluginName;
+  el.localJsName.textContent = entry.jsName;
+  /* 只在切文件时覆盖输入框，避免打字时光标被重置 */
+  if (document.activeElement !== el.localPluginText) el.localPluginText.value = entry.pluginText || '';
+  if (document.activeElement !== el.localJsText) el.localJsText.value = entry.jsText || '';
+  updateLocalSaveState();
+}
+
+function updateLocalSaveState() {
+  const entry = currentLocal();
+  if (!entry) return;
+  el.localSaveBtn.disabled = !entry.dirty;
+  el.localStatus.classList.remove('is-dirty', 'is-synced');
+  if (entry.dirty) {
+    el.localStatus.textContent = '有未保存的修改';
+    el.localStatus.classList.add('is-dirty');
+  } else {
+    el.localStatus.textContent = '已与磁盘同步';
+    el.localStatus.classList.add('is-synced');
+  }
+  /* 侧栏的未保存圆点也要跟着变 */
+  renderLocalList();
+}
+
 /* ========================= 渲染：画布 ========================= */
 
 function renderCanvas() {
@@ -2791,22 +3232,16 @@ function bindPreviewResizer() {
   window.addEventListener('resize', applyPreviewSize);
 }
 
-/** 导出按钮跟着当前页签变：.plugin 页导出插件，脚本页下载 JS，校验页不显示 */
+/** 导出按钮一次导出两个文件（.plugin + 同名 .js），所以不再区分页签；只有校验页没有可导出的东西 */
 function updateExportButton() {
-  const tab = state.tab;
-  if (tab === 'plugin') {
-    el.exportBtn.hidden = false;
-    el.exportLabel.textContent = '导出 .plugin';
-    el.exportBtn.title = '把生成的插件文件保存到本地';
-  } else if (tab === 'script') {
-    el.exportBtn.hidden = false;
-    el.exportLabel.textContent = '下载 JS';
-    el.exportBtn.title = '把脚本代码导出为 .js 文件';
-  } else {
-    el.exportBtn.hidden = true;
-  }
+  const hasScripts = Array.isArray(state.view.scripts) && state.view.scripts.length > 0;
+  el.exportBtn.hidden = state.tab === 'issues';
+  el.exportLabel.textContent = '导出 .plugin + .js';
+  el.exportBtn.title = hasScripts
+    ? '把插件文件与配套脚本一起保存到本地'
+    : '把插件文件保存到本地，同时生成同名的 .js 脚本';
   /* 校验面板没有可复制的文本 */
-  el.copyBtn.hidden = tab === 'issues';
+  el.copyBtn.hidden = state.tab === 'issues';
 }
 
 /* ========================= 渲染：预览 ========================= */
@@ -2864,6 +3299,23 @@ function renderPreview() {
 }
 
 function updateChrome(errors, warns) {
+  /* 本地模式：没有区块概念，状态栏改报「保存状态」 */
+  if (state.mode === 'local') {
+    const entry = currentLocal();
+    if (document.activeElement !== el.nameInput) el.nameInput.value = entry ? entry.base : '';
+    el.blockCount.textContent = entry ? (entry.jsHandle ? '.plugin + .js' : '.plugin') : '本地文件';
+    el.statusHint.classList.remove('is-ok', 'is-warn', 'is-err');
+    if (!entry) {
+      el.statusHint.textContent = '未选择文件';
+    } else if (entry.dirty) {
+      el.statusHint.textContent = '有未保存的修改';
+      el.statusHint.classList.add('is-warn');
+    } else {
+      el.statusHint.textContent = '已与磁盘同步';
+      el.statusHint.classList.add('is-ok');
+    }
+    return;
+  }
   const plugin = currentPlugin();
   if (!plugin) return;
   el.blockCount.textContent = `${plugin.blocks.length} 个区块`;
@@ -2885,9 +3337,39 @@ function updateChrome(errors, warns) {
 }
 
 function renderAll() {
+  /* 选中的本地文件可能已在磁盘上被删掉 → 退回草稿模式，避免卡在空编辑器 */
+  if (state.mode === 'local' && !currentLocal()) state.mode = 'workspace';
+  const local = state.mode === 'local';
+  el.canvas.hidden = local;
+  el.localEditor.hidden = !local;
+
   renderSidebar();
-  renderCanvas();
-  renderPreview();
+  renderLocalList();
+
+  if (local) {
+    renderLocalEditor();
+    updateChrome();
+  } else {
+    renderCanvas();
+    renderPreview();
+  }
+  updateModeChrome();
+}
+
+/** 顶部区随模式切换：本地模式下没有区块可加、文件名不可改、导出/复制让位给「保存」 */
+function updateModeChrome() {
+  const local = state.mode === 'local';
+  /* 本地模式下预览栏整个收掉：右侧不应该再显示草稿的生成结果 */
+  el.app.classList.toggle('is-local-mode', local);
+  el.addBlockAnchor.hidden = local;
+  el.nameInput.disabled = local;
+  el.fileNameLabel.textContent = local ? '本地文件 · Local file' : '文件名 · File name';
+  el.exportBtn.hidden = local || state.tab === 'issues';
+  el.copyBtn.hidden = local || state.tab === 'issues';
+  if (local) {
+    const entry = currentLocal();
+    if (document.activeElement !== el.nameInput) el.nameInput.value = entry ? entry.base : '';
+  }
 }
 
 /* ========================= 事件 ========================= */
@@ -2912,6 +3394,8 @@ function bindEvents() {
     }
     const item = event.target.closest('.plugin-item');
     if (!item) return;
+    /* 从本地文件切回草稿：两种工作对象互斥，否则会卡在本地编辑器里 */
+    state.mode = 'workspace';
     state.selectedId = item.dataset.pluginId;
     renderAll();
     scheduleSave();
@@ -3007,12 +3491,12 @@ function bindEvents() {
   el.canvas.addEventListener('change', onCanvasField);
   bindDragAndDrop();
 
+  /* --- 侧栏：本地文件 --- */
+  bindLocalEvents();
+
   /* --- 预览区：复制 / 导出 / 折叠 / 拖拽尺寸 --- */
-  el.exportBtn.addEventListener('click', () => {
-    /* 导出按钮跟着页签走，点它永远导出「当前正在看的东西」 */
-    if (state.tab === 'script') downloadScripts();
-    else downloadPlugin();
-  });
+  /* 一个按钮导出两个文件（.plugin + 同名 .js），不区分当前页签 */
+  el.exportBtn.addEventListener('click', downloadPlugin);
   el.copyBtn.addEventListener('click', copyCurrent);
   el.previewToggle.addEventListener('click', () => setPreviewCollapsed(true));
   el.previewExpand.addEventListener('click', () => setPreviewCollapsed(false));
@@ -3028,6 +3512,105 @@ function bindEvents() {
     el.tabs.querySelectorAll('.tab').forEach((t) => t.classList.toggle('is-active', t === tab));
     renderPreview();
   });
+}
+
+/* ---------- 本地文件事件 ---------- */
+function bindLocalEvents() {
+  /* 侧栏：连接 / 重新授权 / 选中文件 */
+  el.localList.addEventListener('click', async (event) => {
+    const actBtn = event.target.closest('[data-local-act]');
+    if (actBtn) {
+      const act = actBtn.dataset.localAct;
+      if (act === 'connect') await connectLocalDirs();
+      else if (act === 'reauthorize') await reauthorizeLocalDirs();
+      return;
+    }
+    const item = event.target.closest('[data-local-id]');
+    if (!item) return;
+    await selectLocalFile(item.dataset.localId);
+  });
+
+  /* 侧栏条目是 role=button，补上键盘可达 */
+  el.localList.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const item = event.target.closest('[data-local-id]');
+    if (!item) return;
+    event.preventDefault();
+    selectLocalFile(item.dataset.localId);
+  });
+
+  el.localRefreshBtn.addEventListener('click', async () => {
+    await refreshLocalFiles();
+    toast(`已重新读取目录，${state.local.files.length} 个 .plugin 文件`, 'success');
+    renderAll();
+  });
+
+  el.localDisconnectBtn.addEventListener('click', disconnectLocalDirs);
+
+  /* 编辑区：输入即标记脏；文本留在内存里，切文件也不丢 */
+  const markDirty = (key) => (event) => {
+    const entry = currentLocal();
+    if (!entry) return;
+    entry[key] = event.target.value;
+    entry.dirty =
+      (entry.pluginText || '') !== (entry.savedPlugin || '') || (entry.jsText || '') !== (entry.savedJs || '');
+    updateLocalSaveState();
+  };
+  el.localPluginText.addEventListener('input', markDirty('pluginText'));
+  el.localJsText.addEventListener('input', markDirty('jsText'));
+
+  el.localSaveBtn.addEventListener('click', saveLocalFile);
+
+  el.localReloadBtn.addEventListener('click', async () => {
+    const entry = currentLocal();
+    if (!entry) return;
+    if (entry.dirty && !window.confirm(`放弃对 ${entry.pluginName} 的修改、重新从磁盘读取？`)) return;
+    await loadLocalFile(entry, true);
+    el.localPluginText.value = entry.pluginText || '';
+    el.localJsText.value = entry.jsText || '';
+    updateLocalSaveState();
+    toast('已重新读取磁盘内容', 'success');
+  });
+
+  /* 代码区里按 Tab 插两个空格，而不是把焦点跳走 */
+  [el.localPluginText, el.localJsText].forEach((ta) => ta.addEventListener('keydown', onEditorTabKey));
+
+  /* 有未保存的本地改动时，关页面前拦一下 */
+  window.addEventListener('beforeunload', (event) => {
+    const dirty = state.local.files.some((f) => f.dirty);
+    if (!dirty) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+}
+
+/** 选中本地文件：按需读取磁盘内容后切到本地编辑模式 */
+async function selectLocalFile(id) {
+  state.local.selectedId = id;
+  state.mode = 'local';
+  const entry = currentLocal();
+  if (!entry) {
+    renderAll();
+    return;
+  }
+  try {
+    await loadLocalFile(entry, false);
+  } catch (err) {
+    toast(`读取失败：${(err && err.message) || err}`, 'error');
+  }
+  renderAll();
+}
+
+/** 代码编辑区按 Tab 插入两个空格 */
+function onEditorTabKey(event) {
+  if (event.key !== 'Tab') return;
+  event.preventDefault();
+  const ta = event.target;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  ta.value = `${ta.value.slice(0, start)}  ${ta.value.slice(end)}`;
+  ta.selectionStart = ta.selectionEnd = start + 2;
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 /* ---------- 画布点击 ---------- */
@@ -3648,18 +4231,6 @@ function downloadPlugin() {
   toast(`已导出 ${base}.plugin + ${base}.js`, 'success');
 }
 
-function downloadScripts() {
-  const { scripts } = state.view;
-  if (!scripts.length) {
-    toast('没有可导出的脚本代码', 'warn');
-    return;
-  }
-  scripts.forEach((script, index) => {
-    window.setTimeout(() => downloadFile(script.file, script.code + '\n'), index * 300);
-  });
-  toast(`已导出 ${scripts.length} 个脚本文件`, 'success');
-}
-
 function copyCurrent() {
   const { text, scripts } = state.view;
   const content =
@@ -3730,3 +4301,7 @@ applyPreviewSize();
 setPreviewCollapsed(state.ui.collapsed);
 setSideCollapsed(state.ui.sideCollapsed);
 renderAll();
+
+/* 本地目录句柄存在 IndexedDB 里，启动时静默恢复：
+   权限还在就直接列出文件，权限过期则侧栏显示「重新授权」按钮 */
+restoreLocalDirs();
