@@ -8,7 +8,7 @@ if (body.content.waterVipInfo === null) {
 } else {
     // 有值，替换内容
         body.content.waterVipInfo.typeName = "By过客";
-        body.content.waterVipInfo.remainDays = 2;
+        body.content.waterVipInfo.remainDays = 9999;
 }
 
 body = JSON.stringify(body);
