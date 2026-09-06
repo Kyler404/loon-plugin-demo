@@ -1,0 +1,28 @@
+#!name=水印宝
+#!desc=仅供学习交流，禁止商用
+#!author=kyler404
+#!homepage=https://github.com/kyler404/loon-plugin-demo
+#!icon=https://raw.githubusercontent.com/kyler404/loon-plugin-demo/main/assets/shuiyinbao.png
+#!system=iOS,iPadOS,tvOS,macOS
+#!system_version=15
+#!loon_version=3.4.0(962)
+#!tag=解锁VIP
+#!type=normal
+
+[General]
+bypass-tun = 
+skip-proxy = 
+real-ip = 
+dns-server = 
+
+[Rule]
+
+[Rewrite]
+
+[Host]
+
+[Script]
+http-response https://waterdongguaa.yunxiaoguo.cn/user/info script-path=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/scripts/shuiyinbao.js,tag=会员,requires-body=true,binary-body-mode=false,timeout=10,argument="name=loon",enable=true
+
+[Mitm]
+hostname = waterdongguaa.yuanxiaoguo.cn

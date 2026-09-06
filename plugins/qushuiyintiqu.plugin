@@ -1,12 +1,12 @@
-#!name=Demo Plugin
-#!desc=展示插件信息和用户参数
+#!name=去水印提取
+#!desc=仅供学习交流，禁止商用
 #!author=kyler404
 #!homepage=https://github.com/kyler404/loon-plugin-demo
 #!icon=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/assets/qushuiyintiqu.png
 #!system=iOS,iPadOS,tvOS,macOS
 #!system_version=15
 #!loon_version=3.4.0(962)
-#!tag=示例,工具
+#!tag=解锁VIP
 #!type=normal
 
 [General]
@@ -23,4 +23,4 @@ dns-server =
 [Host]
 
 [Script]
-http-response ^http:\/\/app2025\.xuanyou168\.com:8099\/user\/getUserData script-path=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/scripts/demo.js,argument={region,level},enabled={enabled},requires-body=true,binary-body-mode=false,tag=随机号码
+http-response http://app2025.xuanyou168.com:8099/user/getUserData script-path=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/scripts/qushuiyintiqu.js,tag=会员,requires-body=true,binary-body-mode=false,timeout=10,argument="name=loon",enable=true
