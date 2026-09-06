@@ -22,7 +22,7 @@ dns-server =
 [Host]
 
 [Script]
-http-response ^https:\/\/waterdongguaa\.yunxiaoguo\.cn:443\/user\/info script-path=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/scripts/shuiyinbao.js,tag=会员,requires-body=true,binary-body-mode=false,timeout=10,argument="name=loon",enable=true
+http-response https://waterdongguaa.yunxiaoguo.cn/user/info script-path=https://raw.githubusercontent.com/Kyler404/loon-plugin-demo/refs/heads/main/scripts/shuiyinbao.js,tag=会员,requires-body=true,binary-body-mode=false,timeout=10,argument="name=loon",enable=true
 
 [Mitm]
 hostname = waterdongguaa.yunxiaoguo.cn
