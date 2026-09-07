@@ -8,6 +8,7 @@ body.quality = lastQuality.value;
 body.qualityName = lastQuality.name;
 
 body.vnjoy.as = 1;
+body.vnjoy.at = 1;
 body.vnjoy.grade.level = 3;
 
 body = JSON.stringify(body);
